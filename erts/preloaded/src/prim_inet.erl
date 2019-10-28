@@ -25,7 +25,6 @@
 -module(prim_inet).
 
 %% Primitive inet_drv interface
-
 -export([open/3, open/4, fdopen/4, fdopen/5, close/1]).
 -export([bind/3, listen/1, listen/2, peeloff/2]).
 -export([connect/3, connect/4, async_connect/4]).
@@ -49,6 +48,8 @@
 -include("inet_sctp.hrl").
 -include("inet_int.hrl").
 
+-type insock() :: port().
+
 %%%-define(DEBUG, 1).
 -ifdef(DEBUG).
 -define(
@@ -62,30 +63,75 @@
 -define(DBG_FORMAT(Format, Args), ok).
 -endif.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
+%% @doc open/3
 %%
-%% OPEN(tcp | udp | sctp, inet | inet6, stream | dgram | seqpacket)  ->
-%%       {ok, insock()} |
-%%       {error, Reason}
-%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%% @see
+%%--------------------------------------------------------------------
+-spec open(Protocol , Family, Type) -> Result when
+      Protocol :: atom(),
+      Family :: atom(),
+      Type :: atom(),
+      Result :: {ok, insock()} | {error, Reason :: term()}.
 open(Protocol, Family, Type) ->
     open(Protocol, Family, Type, [], ?INET_REQ_OPEN, []).
 
+%%--------------------------------------------------------------------
+%% @doc open/4 
+%%
+%% @see
+%%--------------------------------------------------------------------
+-spec open(Protocol, Family, Type, Opts) -> Result when
+      Protocol :: atom(),
+      Family :: atom(),
+      Type :: atom(),
+      Opts :: list(),
+      Result :: {ok, insock()} | {error, Reason :: term()}.
 open(Protocol, Family, Type, Opts) ->
     open(Protocol, Family, Type, Opts, ?INET_REQ_OPEN, []).
 
-%% FDOPEN(tcp|udp|sctp, inet|inet6|local, stream|dgram|seqpacket, integer())
-
+%%--------------------------------------------------------------------
+%% @doc fdopen/4
+%%
+%%--------------------------------------------------------------------
+-spec fdopen(Protocol, Family, Type, Fd) -> Result when
+      Protocol :: atom(),
+      Family :: atom(),
+      Type :: atom(),
+      Fd :: integer(),
+      Result :: {ok, insock()} | {error, Reason :: term() }.
 fdopen(Protocol, Family, Type, Fd) when is_integer(Fd) ->
     fdopen(Protocol, Family, Type, Fd, true).
+
+%%--------------------------------------------------------------------
+%% @doc fdopen/5
+%%
+%%--------------------------------------------------------------------
+-spec fdopen(Protocol, Family, Type, Fd, Bound) -> Result when
+      Protocol :: atom(),
+      Family :: atom(),
+      Type :: atom(),
+      Fd :: integer(),
+      Bound :: boolean(),
+      Result :: {ok, insock()} | {error, Reason :: term() }.
 
 fdopen(Protocol, Family, Type, Fd, Bound)
   when is_integer(Fd), is_boolean(Bound) ->
     open(Protocol, Family, Type, [], ?INET_REQ_FDOPEN,
          [?int32(Fd), enc_value_2(bool, Bound)]).
 
+%%--------------------------------------------------------------------
+%% @doc open/6
+%%
+%%--------------------------------------------------------------------
+-spec open(Protocol, Family, Type, Opts, Req, Data) -> Result when
+      Protocol :: atom(),
+      Family :: atom(),
+      Type :: term(),
+      Opts :: list(),
+      Req :: integer(),
+      Data :: term(),
+      Result :: {ok, insock()} | {error, Reason :: term()}.
 open(Protocol, Family, Type, Opts, Req, Data) ->
     Drv = protocol2drv(Protocol),
     AF = enc_family(Family),
@@ -112,30 +158,56 @@ open(Protocol, Family, Type, Opts, Req, Data) ->
 	error:system_limit -> {error, system_limit}
     end.
 
+%%--------------------------------------------------------------------
+%% @doc enc_family/1
+%%--------------------------------------------------------------------
+-spec enc_family(AddressFamily) -> Result when
+      AddressFamily :: inet | inet6 | local,
+      Result :: any().
 enc_family(inet)  -> ?INET_AF_INET;
 enc_family(inet6) -> ?INET_AF_INET6;
 enc_family(local) -> ?INET_AF_LOCAL.
 
+%%--------------------------------------------------------------------
+%% @doc enc_type/1
+%%--------------------------------------------------------------------
+-spec enc_type(Protocol) -> Result when
+      Protocol :: stream | dgram | seqpacket,
+      Result :: any().
 enc_type(stream) -> ?INET_TYPE_STREAM;
 enc_type(dgram) -> ?INET_TYPE_DGRAM;
 enc_type(seqpacket) -> ?INET_TYPE_SEQPACKET.
 
+%%--------------------------------------------------------------------
+%% @doc procotol2drv/1
+%%--------------------------------------------------------------------
+-spec protocol2drv(Protocol) -> Result when
+      Protocol :: tcp | udp | sctp,
+      Result :: string().
 protocol2drv(tcp)  -> "tcp_inet";
 protocol2drv(udp)  -> "udp_inet";
 protocol2drv(sctp) -> "sctp_inet".
 
+%%--------------------------------------------------------------------
+%% @doc drv2protocol/1
+%%--------------------------------------------------------------------
+-spec drv2protocol(Protocol) -> Result when
+      Protocol :: string(),
+      Result :: tcp | udp | sctp | undefined.
 drv2protocol("tcp_inet")  -> tcp;
 drv2protocol("udp_inet")  -> udp;
 drv2protocol("sctp_inet") -> sctp;
 drv2protocol(_)           -> undefined.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
+%% @doc shutdown/2
 %%
-%% Shutdown(insock(), atom()) -> ok
-%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% TODO: shutdown equivalent for SCTP
-%%
+%% @todo shutdown equivalent for SCTP
+%%--------------------------------------------------------------------
+-spec shutdown(Socket, Mode) -> Result when
+      Socket :: insock(),
+      Mode :: read | write | read_write,
+      Result :: {ok, []} | {error, term()}.
 shutdown(S, read) when is_port(S) ->
     shutdown_1(S, 0);
 shutdown(S, write) when is_port(S) ->
@@ -143,18 +215,25 @@ shutdown(S, write) when is_port(S) ->
 shutdown(S, read_write) when is_port(S) ->
     shutdown_1(S, 2).
 
+%%--------------------------------------------------------------------
+%% @doc shutdown_1/2
+%%--------------------------------------------------------------------
+-spec shutdown_1(Socket, How) -> Result when
+      Socket :: insock(),
+      How :: 0 | 1 | 2,
+      Result :: {ok, []} | {error, term()}.
 shutdown_1(S, How) ->
     case ctl_cmd(S, ?TCP_REQ_SHUTDOWN, [How]) of
 	{ok, []} -> ok;
 	{error,_}=Error -> Error
     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%
-%% CLOSE(insock()) -> ok
-%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%%--------------------------------------------------------------------
+%% @doc close/1
+%%--------------------------------------------------------------------
+-spec close(Socket) -> Result when
+      Socket :: insock(),
+      Result :: ok.
 close(S) when is_port(S) ->
     ?DBG_FORMAT("prim_inet:close(~p)~n", [S]),
     case getopt(S, linger) of
@@ -197,6 +276,14 @@ close(S) when is_port(S) ->
             end
     end.
 
+%%--------------------------------------------------------------------
+%% @doc close_pend_loop/3
+%%--------------------------------------------------------------------
+-spec close_pend_loop(Socket, TRef, N) -> Result when
+      Socket :: insock(),
+      TRef :: term(),
+      N :: integer(),
+      Result :: any().
 close_pend_loop(S, Tref, N) ->
     ?DBG_FORMAT("prim_inet:close_pend_loop(~p, _, ~p)~n", [S,N]),
     receive
@@ -236,7 +323,13 @@ close_pend_loop(S, Tref, N) ->
             end
     end.
 
-
+%%--------------------------------------------------------------------
+%% @doc close_port/2
+%%--------------------------------------------------------------------
+-spec close_port(Socket, TRef) -> Result when
+      Socket :: insock(),
+      TRef :: term(),
+      Result :: ok.
 close_port(S, Tref) ->
     ?DBG_FORMAT("prim_inet:close_port(~p, _)~n", [S]),
     case erlang:cancel_timer(Tref) of
@@ -249,7 +342,13 @@ close_port(S, Tref) ->
             ok
     end,
     close_port(S).
-%%
+
+%%--------------------------------------------------------------------
+%% @doc close_port/1
+%%--------------------------------------------------------------------
+-spec close_port(Socket) -> Result when
+      Socket :: insock(),
+      Result :: ok.
 close_port(S) ->
     ?DBG_FORMAT("prim_inet:close_port(~p)~n", [S]),
     _Closed = (catch erlang:port_close(S)),
@@ -257,17 +356,21 @@ close_port(S) ->
     ?DBG_FORMAT("prim_inet:close_port(~p) ~p~n", [S,_Closed]),
     ok.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
-%% BIND(insock(), IP, Port) -> {ok, integer()} | {error, Reason}
+%% @doc bind the insock() to the interface address given by IP and Port
 %%
-%% bind the insock() to the interface address given by IP and Port
-%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
 %% Multi-homed "bind": sctp_bindx(). The Op is 'add' or 'remove'.
 %% If no addrs are specified, it just does nothing.
 %% Function returns {ok, S} on success, unlike TCP/UDP "bind":
+%%
+%%--------------------------------------------------------------------
+-spec bind(Socket, IP, Port) -> Result when
+      Socket :: insock(),
+      IP :: add | remove | atom(),
+      Port :: term(),
+      Result :: {ok, integer()} | {Reason, term()},
+      Reason :: term().
 bind(S, add, Addrs) when is_port(S), is_list(Addrs) ->
     bindx(S, 1, Addrs);
 bind(S, remove, Addrs) when is_port(S), is_list(Addrs) ->
@@ -285,6 +388,15 @@ bind(S, Addr, _) when is_port(S), tuple_size(Addr) =:= 2 ->
 bind(S, IP, Port) ->
     bind(S, {IP, Port}, 0).
 
+%%--------------------------------------------------------------------
+%% @doc bindx/3
+%%--------------------------------------------------------------------
+-spec bindx(Socket, AddFlag, Addrs) -> Result when
+      Socket :: insock(),
+      AddFlag :: integer(),
+      Addrs :: list(),
+      Result :: {ok, term()} | {error, Reason},
+      Reason :: term().
 bindx(S, AddFlag, Addrs) ->
     case getprotocol(S) of
 	sctp ->
@@ -306,12 +418,18 @@ bindx(S, AddFlag, Addrs) ->
 	    {error, einval}
     end.
 
+%%--------------------------------------------------------------------
+%% @doc bindx_check_addrs/1
+%%--------------------------------------------------------------------
+-spec bindx_check_addrs(Addresses) -> Result when
+      Addresses :: list(),
+      Result :: true.
 bindx_check_addrs([Addr|Addrs]) ->
     type_value(set, addr, Addr) andalso bindx_check_addrs(Addrs);
 bindx_check_addrs([]) ->
     true.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% CONNECT(insock(), IP, Port [,Timeout]) -> ok | {error, Reason}
 %%
@@ -322,17 +440,26 @@ bindx_check_addrs([]) ->
 %%               > 0  -> wait for timeout ms if not connected then 
 %%                       return {error, timeout} 
 %%
-%% ASYNC_CONNECT(insock(), IP, Port, Timeout) -> {ok, S, Ref} | {error, Reason}
-%%
-%%  a {inet_async,S,Ref,Status} will be sent on socket condition
-%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% For TCP, UDP or SCTP sockets.
-%%
-
+%%--------------------------------------------------------------------
+-spec connect(Socket, IP, Port) -> Result when
+      Socket :: insock(),
+      IP :: term(),
+      Port :: term(),
+      Result :: ok | {error, Reason},
+      Reason :: term().
 connect(S, IP, Port) ->
     connect(S, IP, Port, infinity).
-%%
+
+%%--------------------------------------------------------------------
+%% @doc connect/4
+%%--------------------------------------------------------------------
+-spec connect(Socket, Addr, Port, Time) -> Result when
+      Socket :: insock(),
+      Addr :: term(),
+      Port :: term(),
+      Time :: infinity | integer(),
+      Result :: {ok, term()} | {error, Reason},
+      Reason :: term().
 connect(S, Addr, _, Time) when is_port(S), tuple_size(Addr) =:= 2 ->
     case type_value(set, addr, Addr) of
 	true when Time =:= infinity ->
@@ -355,7 +482,22 @@ connect0(S, Addr, Time) ->
 	Error -> Error
     end.
 
-
+%%--------------------------------------------------------------------
+%% ASYNC_CONNECT(insock(), IP, Port, Timeout) -> {ok, S, Ref} | {error, Reason}
+%%
+%%  a {inet_async,S,Ref,Status} will be sent on socket condition
+%%
+%% For TCP, UDP or SCTP sockets.
+%%
+%%--------------------------------------------------------------------
+-spec async_connect(Socket, IP, Port, Timeout) -> Result when
+      Socket :: insock(),
+      IP :: term(),
+      Port :: term(),
+      Timeout :: integer(),
+      Result :: {ok, Socket, Ref} | {error, Reason},
+      Ref :: term(),
+      Reason :: term().
 async_connect(S, Addr, _, Time) when is_port(S), tuple_size(Addr) =:= 2 ->
     case type_value(set, addr, Addr) of
 	true when Time =:= infinity ->
@@ -369,6 +511,15 @@ async_connect(S, Addr, _, Time) when is_port(S), tuple_size(Addr) =:= 2 ->
 async_connect(S, IP, Port, Time) ->
     async_connect(S, {IP, Port}, 0, Time).
 
+%%--------------------------------------------------------------------
+%% @doc async_connect0/3
+%%--------------------------------------------------------------------
+-spec async_connect0(Socket, Addr, Time) -> Result when
+      Socket :: insock(),
+      Addr :: term(),
+      Time :: infinity | integer(),
+      Result :: {ok, term()} | {error, Reason},
+      Reason :: term().
 async_connect0(S, Addr, Time) ->
     case ctl_cmd(
 	   S, ?INET_REQ_CONNECT,
@@ -378,7 +529,7 @@ async_connect0(S, Addr, Time) ->
 	{error, _}=Error -> Error
     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% ACCEPT(insock() [,Timeout][,FamilyOpts] ) -> {ok,insock()} | {error, Reason}
 %%
@@ -391,24 +542,47 @@ async_connect0(S, Addr, Time) ->
 %% FamilyOpts are address family specific options to copy from
 %% listen socket to accepted socket
 %%
-%% ASYNC_ACCEPT(insock(), Timeout)
-%%
-%%  async accept. return {ok,S,Ref} or {error, Reason}
-%%  the owner of socket S will receive an {inet_async,S,Ref,Status} on 
-%%  socket condition
-%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% For TCP sockets only.
-%%
+%%--------------------------------------------------------------------
+-spec accept(Socket) -> Result when
+      Socket :: insock(),
+      Result :: {ok, Socket} | {error, Reason},
+      Reason :: term().
 accept(L) -> accept0(L, -1, []).
 
+%%--------------------------------------------------------------------
+%% @doc accept/2
+%%--------------------------------------------------------------------
+-spec accept(Socket, Time) -> Result when
+      Socket :: insock(),
+      Time :: infinity | integer(),
+      Result :: {ok, Socket} | {error, Reason},
+      Reason :: term().
 accept(L, infinity) -> accept0(L, -1, []);
 accept(L, FamilyOpts) when is_list(FamilyOpts) -> accept0(L, -1, FamilyOpts);
 accept(L, Time) -> accept0(L, Time, []).
 
+%%--------------------------------------------------------------------
+%% @doc accept/3
+%%--------------------------------------------------------------------
+-spec accept(Socket, Time, FamilyOpts) -> Result when
+      Socket :: insock(),
+      Time :: infinity | integer(),
+      FamilyOpts :: list(),
+      Result :: {ok, term()} | {error, Reason},
+      Reason :: term().
 accept(L, infinity, FamilyOpts) -> accept0(L, -1, FamilyOpts);
 accept(L, Time, FamilyOpts) -> accept0(L, Time, FamilyOpts).
 
+%%--------------------------------------------------------------------
+%% @doc accept0/3
+%%--------------------------------------------------------------------
+-spec accept0(Socket, Time, FamilyOpts) -> Result when
+      Socket :: insock(),
+      Time :: infinity | integer(),
+      FamilyOpts :: list(),
+      Result :: {ok, term()} | {error, Reason},
+      Reason :: term().
 accept0(L, Time, FamilyOpts)
   when is_port(L), is_integer(Time), is_list(FamilyOpts) ->
     case async_accept(L, Time) of
@@ -422,7 +596,14 @@ accept0(L, Time, FamilyOpts)
 	Error -> Error
     end.
 
+%%--------------------------------------------------------------------
+%% @doc accept_opts/3
 %% setup options from listen socket on the connected socket
+%%--------------------------------------------------------------------
+-spec accept_opts(Socket, Socket, FamilyOpts) -> Result when
+      Socket :: insock(),
+      FamilyOpts :: list(),
+      Result :: term().
 accept_opts(L, S, FamilyOpts) ->
     case
         getopts(
@@ -441,24 +622,46 @@ accept_opts(L, S, FamilyOpts) ->
 	    close(S), Error2
     end.
 
+%%--------------------------------------------------------------------
+%% ASYNC_ACCEPT(insock(), Timeout)
+%%
+%%  async accept. return {ok,S,Ref} or {error, Reason}
+%%  the owner of socket S will receive an {inet_async,S,Ref,Status} on 
+%%  socket condition
+%%
+%% For TCP sockets only.
+%%--------------------------------------------------------------------
+-spec async_accept(Socket, Time) -> Result when
+      Socket :: insock(),
+      Time :: infinity | integer(),
+      Result :: {ok, list()} | {error, term()}.
 async_accept(L, Time) ->
     case ctl_cmd(L,?INET_REQ_ACCEPT, [enc_time(Time)]) of
 	{ok, [R1,R0]} -> {ok, ?u16(R1,R0)};
 	{error,_}=Error -> Error
     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% LISTEN(insock() [,Backlog]) -> ok | {error, Reason}
 %%
 %% set listen mode on socket
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% For TCP or SCTP sockets. For SCTP, Boolean backlog value (enable/disable
 %% listening) is also accepted:
-
+%%--------------------------------------------------------------------
+-spec listen(Socket) -> Result when
+      Socket :: insock(),
+      Result :: ok | {error, term()}.
 listen(S) -> listen(S, ?LISTEN_BACKLOG).
 
+%%--------------------------------------------------------------------
+%% @doc listen/2
+%%--------------------------------------------------------------------
+-spec listen(Socket, BackLog) -> Result when
+      Socket :: insock(),
+      BackLog :: boolean() | integer(),
+      Result :: ok | {error, term()}.
 listen(S, true) -> listen(S, ?LISTEN_BACKLOG);
 listen(S, false) -> listen(S, 0);
 listen(S, BackLog) when is_port(S), is_integer(BackLog) ->
@@ -467,14 +670,19 @@ listen(S, BackLog) when is_port(S), is_integer(BackLog) ->
 	{error,_}=Error   -> Error
     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% PEELOFF(insock(), AssocId) -> {ok,outsock()} | {error, Reason}
 %%
 %% SCTP: Peel off one association into a type stream socket
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%%--------------------------------------------------------------------
+-spec peeloff(Socket, AssocId) -> Result when
+      Socket :: insock(),
+      AssocId :: integer(),
+      Result :: {ok, OutSocket} | {error, Reason},
+      OutSocket :: term(),
+      Reason :: term().
 peeloff(S, AssocId) ->
     case ctl_cmd(S, ?SCTP_REQ_PEELOFF, [?int32(AssocId)]) of
 	inet_reply ->
@@ -484,18 +692,34 @@ peeloff(S, AssocId) ->
 	{error,_}=Error -> Error
     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% SEND(insock(), Data) -> ok | {error, Reason}
 %%
 %% send Data on the socket (io-list)
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% This is a generic "port_command" interface used by TCP, UDP, SCTP, depending
 %% on the driver it is mapped to, and the "Data". It actually sends out data,--
 %% NOT delegating this task to any back-end.  For SCTP, this function MUST NOT
 %% be called directly -- use "sendmsg" instead:
 %%
+%%--------------------------------------------------------------------
+-spec send(Socket, Data) -> Result when
+      Socket :: insock(),
+      Data :: term(),
+      Result :: ok | {error, term()}.
+send(S, Data) ->
+    send(S, Data, []).
+
+%%--------------------------------------------------------------------
+%% @doc send/3
+%%--------------------------------------------------------------------
+-spec send(Socket, Data, OptList) -> Result when
+      Socket :: insock(),
+      Data :: term(),
+      OptList :: list(),
+      Result :: ok | {error, Reason},
+      Reason :: term().
 send(S, Data, OptList) when is_port(S), is_list(OptList) ->
     ?DBG_FORMAT("prim_inet:send(~p, _, ~p)~n", [S,OptList]),
     try erlang:port_command(S, Data, OptList) of
@@ -510,6 +734,13 @@ send(S, Data, OptList) when is_port(S), is_list(OptList) ->
 	     {error,einval}
     end.
 
+%%--------------------------------------------------------------------
+%% @doc send_recv_reply/2
+%%--------------------------------------------------------------------
+-spec send_recv_reply(Socket, MRef) -> Result when
+      Socket :: insock(),
+      MRef :: undefined | term(),
+      Result :: term().
 send_recv_reply(S, Mref) ->
     ReplyTimeout =
         case Mref of
@@ -539,20 +770,22 @@ send_recv_reply(S, Mref) ->
             send_recv_reply(S, monitor(port, S))
     end.
 
-
-send(S, Data) ->
-    send(S, Data, []).
-
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% SENDTO(insock(), IP, Port, Data) -> ok | {error, Reason}
 %%
 %% send Datagram to the IP at port (Should add sync send!)
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%
 %% "sendto" is for UDP. IP and Port are set by the caller to 0 if the socket
 %% is known to be connected.
-
+%%--------------------------------------------------------------------
+-spec sendto(Socket, IP, Port, Data) -> Result when
+      Socket :: insock(),
+      IP :: tuple(),
+      Port :: port(),
+      Data :: term(),
+      Result :: ok | {error, Reason :: term()}.
 sendto(S, {_, _} = Address, AncOpts, Data)
   when is_port(S), is_list(AncOpts) ->
     case encode_opt_val(AncOpts) of
@@ -597,15 +830,21 @@ sendto(S, IP, Port, Data)
   when is_port(S), is_integer(Port) ->
     sendto(S, {IP, Port}, [], Data).
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% SENDMSG(insock(), IP, Port, InitMsg, Data)   or
 %% SENDMSG(insock(), SndRcvInfo,        Data)   -> ok | {error, Reason}
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%
 %% SCTP: Sending data over an existing association: no need for a destination
 %% addr; uses SndRcvInfo:
 %%
+%%--------------------------------------------------------------------
+-spec sendmsg(Socket, SndRcvInfo, Data) -> Result when
+      Socket :: insock(),
+      SndRcvInfo :: #sctp_sndrcvinfo{},
+      Data :: term(),
+      Result :: ok | {error, Reason :: term()}.
 sendmsg(S, #sctp_sndrcvinfo{}=SRI, Data) when is_port(S) ->
     Type = type_opt(set, sctp_default_send_param),
     try type_value(set, Type, SRI) of
@@ -616,15 +855,20 @@ sendmsg(S, #sctp_sndrcvinfo{}=SRI, Data) when is_port(S) ->
 	Reason -> {error,Reason}
     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% SENDFILE(outsock(), Fd, Offset, Length) -> {ok,BytesSent} | {error, Reason}
 %%
 %% send Length data bytes from a file handle, to a socket, starting at Offset
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% "sendfile" is for TCP:
-
+%%--------------------------------------------------------------------
+-spec sendfile(Socket, Fd, Offset, Length) -> Result when
+      Socket :: insock(),
+      Fd :: binary(),
+      Offset :: integer(),
+      Length :: integer(),
+      Result :: {ok, BytesSent :: integer()} | {error, Reason :: term()}.
 sendfile(S, FileHandle, Offset, Length)
         when not is_port(S);
              not is_binary(FileHandle);
@@ -644,6 +888,12 @@ sendfile(S, FileHandle, Offset, Length) ->
             {error, einval}
     end.
 
+%%--------------------------------------------------------------------
+%% @doc sendfile_maybe_cork/1
+%%--------------------------------------------------------------------
+-spec sendfile_maybe_cork(Socket) -> Result when
+      Socket :: insock(),
+      Result :: boolean().
 sendfile_maybe_cork(S) ->
     case getprotocol(S) of
         tcp ->
@@ -657,12 +907,29 @@ sendfile_maybe_cork(S) ->
         _ -> false
     end.
 
+%%--------------------------------------------------------------------
+%% @doc sendfile_maybe_uncork/2
+%%--------------------------------------------------------------------
+-spec sendfile_maybe_uncork(Socket, Control) -> Result when
+      Socket :: insock(),
+      Control :: boolean(),
+      Result :: ok.
 sendfile_maybe_uncork(S, true) ->
     _ = setopts(S, [{nopush,false}]),
     ok;
 sendfile_maybe_uncork(_, false) ->
     ok.
 
+%%--------------------------------------------------------------------
+%% @doc sendfile_1/4
+%%--------------------------------------------------------------------
+-spec sendfile_1(Socket, FileHandle, Offset, Length) -> Result when
+      Socket :: insock(),
+      FileHandle :: term(),
+      Offset :: integer(),
+      Length :: integer(),
+      Result :: {ok, integer()} | {error, Reason},
+      Reason :: einval | closed | term().
 sendfile_1(S, FileHandle, Offset, 0) ->
     sendfile_1(S, FileHandle, Offset, (1 bsl 63) - 1);
 sendfile_1(_S, _FileHandle, Offset, Length) when
@@ -687,7 +954,8 @@ sendfile_1(S, FileHandle, Offset, Length) ->
             {error, Reason}
     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
+%% @doc recv/2
 %%
 %% RECV(insock(), Length, [Timeout]) -> {ok,Data} | {error, Reason}
 %%
@@ -695,11 +963,22 @@ sendfile_1(S, FileHandle, Offset, Length) ->
 %% if 0 is given then a Data packet is requested (see setopt (packet))
 %%    N read N bytes
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% "recv" is for TCP:
-
+%%--------------------------------------------------------------------
+-spec recv(Socket, Length) -> Result when
+      Socket :: insock(),
+      Length :: integer(),
+      Result :: {ok, Data :: term()} | {error, Reason :: term()}.
 recv(S, Length) -> recv0(S, Length, -1).
 
+%%--------------------------------------------------------------------
+%% @doc recv/3
+%%-------------------------------------------------------------------
+-spec recv(Socket, Length, Time) -> Result when
+      Socket :: insock(),
+      Length :: integer(),
+      Time :: integer(),
+      Result :: {ok, Data :: term()} | {error, Reason :: term()}.
 recv(S, Length, infinity) -> recv0(S, Length,-1);
 
 recv(S, Length, Time) when is_integer(Time) -> recv0(S, Length, Time).
@@ -714,15 +993,22 @@ recv0(S, Length, Time) when is_port(S), is_integer(Length), Length >= 0 ->
 	    end;
 	Error -> Error
     end.
-	     
 
+%%--------------------------------------------------------------------
+%% @doc async_recv
+%%--------------------------------------------------------------------
+-spec async_recv(Socket, Length, Time) -> Result when
+      Socket :: insock(),
+      Length :: integer(),
+      Time :: integer(),
+      Result :: {ok, integer()} | {error, term()}.
 async_recv(S, Length, Time) ->
     case ctl_cmd(S, ?TCP_REQ_RECV, [enc_time(Time), ?int32(Length)]) of
 	{ok,[R1,R0]} -> {ok, ?u16(R1,R0)};
 	{error,_}=Error -> Error
     end.	    
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% RECVFROM(insock(), Lenth [Timeout]) -> {ok,{IP,Port,Data}} | {error, Reason}
 %%                           For SCTP: -> {ok,{IP,Port,[AncData],Data}}
@@ -731,14 +1017,34 @@ async_recv(S, Length, Time) ->
 %% if 0 is given then a Data packet is requested (see setopt (packet))
 %%    N read N bytes
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% "recvfrom" is for both UDP and SCTP.
 %% NB: "Length" is actually ignored for these protocols, since they are msg-
 %% oriented: preserved here only for API compatibility.
 %%
+%%--------------------------------------------------------------------
+-spec recvfrom(Socket, Length) -> Result when
+      Socket :: insock(),
+      Length :: integer(),
+      Result :: {ok, IP, Port, Data} | {error, Reason}, 
+      IP :: tuple(),
+      Port :: integer(),
+      Data :: list() | binary(),
+      Reason :: term().
 recvfrom(S, Length) ->
     recvfrom(S, Length, infinity).
 
+%%--------------------------------------------------------------------
+%% @doc recvfrom/3
+%%--------------------------------------------------------------------
+-spec recvfrom(Socket, Length, Timeout) -> Result when
+      Socket :: insock(),
+      Length :: integer(),
+      Timeout :: integer(),
+      Result :: {ok, {IP, Port, Data}} | {error, Reason},
+      IP :: tuple(),
+      Port :: integer(),
+      Data :: list() | binary(),
+      Reason :: term().
 recvfrom(S, Length, infinity) when is_port(S) ->
     recvfrom0(S, Length, -1);
 recvfrom(S, Length, Time) when is_port(S) ->
@@ -749,6 +1055,14 @@ recvfrom(S, Length, Time) when is_port(S) ->
 	    {error, einval}
     end.
 
+%%--------------------------------------------------------------------
+%% @doc recvfrom0/3
+%%--------------------------------------------------------------------
+-spec recvfrom0(Socket, Length, Time) -> Result when
+      Socket :: insock(),
+      Length :: integer(),
+      Time :: integer(),
+      Result ::  {ok, term()} | {error, term()}.
 recvfrom0(S, Length, Time)
   when is_integer(Length), 0 =< Length, Length =< 16#ffffffff ->
     case ctl_cmd(S, ?PACKET_REQ_RECV,[enc_time(Time),?int32(Length)]) of
@@ -787,12 +1101,17 @@ recvfrom0(S, Length, Time)
     end;
 recvfrom0(_, _, _) -> {error,einval}.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% PEERNAME(insock()) -> {ok, {IP, Port}} | {error, Reason}
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%%--------------------------------------------------------------------
+-spec peername(Socket) -> Result when
+      Socket :: insock(),
+      Result :: {ok, {IP, Port}} | {error, Reason},
+      IP :: tuple(),
+      Port :: integer(),
+      Reason :: term().
 peername(S) when is_port(S) ->
     case ctl_cmd(S, ?INET_REQ_PEER, []) of
 	{ok, [F | Addr]} ->
@@ -801,6 +1120,14 @@ peername(S) when is_port(S) ->
 	{error, _} = Error -> Error
     end.
 
+%%--------------------------------------------------------------------
+%% @doc setpeername/2
+%%--------------------------------------------------------------------
+-spec setpeername(Socket, Addr) -> Result when
+      Socket :: insock(),
+      Addr :: undefined | list(),
+      Result :: {ok, []} | {error, Reason},
+      Reason :: einval | term().
 setpeername(S, undefined) when is_port(S) ->
     case ctl_cmd(S, ?INET_REQ_SETPEER, []) of
 	{ok, []} -> ok;
@@ -817,15 +1144,30 @@ setpeername(S, Addr) when is_port(S) ->
 	    {error, einval}
     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% PEERNAMES(insock()) -> {ok, [{IP, Port}, ...]} | {error, Reason}
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%%--------------------------------------------------------------------
+-spec peernames(Socket) -> Result when
+      Socket :: insock(),
+      Result :: {ok, Peers} | {error, Reason},
+      Peers :: [{IP, Port}, ...],
+      IP :: tuple(),
+      Port :: integer(),
+      Reason :: term().
 peernames(S) when is_port(S) ->
     peernames(S, undefined).
 
+%%--------------------------------------------------------------------
+%% @doc peernames/2
+%%--------------------------------------------------------------------
+-spec peernames(Socket, AssocId) -> Result when
+      Socket :: insock(),
+      AssocId :: #sctp_assoc_change{} | undefined | integer(),
+      Result :: {ok, Addrs} | {error, Reason},
+      Addrs :: term(),
+      Reason :: term().
 peernames(S, #sctp_assoc_change{assoc_id=AssocId}) when is_port(S) ->
     peernames(S, AssocId);
 peernames(S, AssocId)
@@ -847,12 +1189,18 @@ peernames(S, AssocId)
 	    {error,einval}
     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% SOCKNAME(insock()) -> {ok, {IP, Port}} | {error, Reason}
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%%--------------------------------------------------------------------
+-spec sockname(Socket) -> Result when
+      Socket :: insock(),
+      Result :: {ok, Addr} | {error, Reason},
+      Addr :: {IP, Port},
+      IP :: tuple(),
+      Port :: integer(),
+      Reason :: term().
 sockname(S) when is_port(S) ->
     case ctl_cmd(S, ?INET_REQ_NAME, []) of
 	{ok, [F | Addr]} ->
@@ -879,15 +1227,34 @@ setsockname(S, Addr) when is_port(S) ->
 	    {error, einval}
     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% SOCKNAMES(insock()) -> {ok, [{IP, Port}, ...]} | {error, Reason}
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%%--------------------------------------------------------------------
+-spec socknames(Socket) -> Result when
+      Socket :: insock(),
+      Result :: {ok, Addrs} | {error, Reason},
+      Addrs :: [Addr, ...],
+      Addr :: {IP, Port},
+      IP :: tuple(),
+      Port :: integer(),
+      Reason :: term().
 socknames(S) when is_port(S) ->
     socknames(S, undefined).
 
+%%--------------------------------------------------------------------
+%% @doc socknames/2
+%%--------------------------------------------------------------------
+-spec socknames(Socket, AssocId) -> Result when
+      Socket :: insock(),
+      AssocId :: integer() | undefined | #sctp_assoc_change{},
+      Result :: {ok, Addrs} | {error, Reason},
+      Addrs :: [Addr, ...],
+      Addr :: {IP, Port},
+      IP :: tuple(),
+      Port :: integer(),
+      Reason :: term().
 socknames(S, #sctp_assoc_change{assoc_id=AssocId}) when is_port(S) ->
     socknames(S, AssocId);
 socknames(S, AssocId)
@@ -909,18 +1276,32 @@ socknames(S, AssocId)
 	    {error,einval}
     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% SETOPT(insock(), Opt, Value) -> ok | {error, Reason}
-%% SETOPTS(insock(), [{Opt,Value}]) -> ok | {error, Reason}
 %%
 %% set socket, ip and driver option
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%%--------------------------------------------------------------------
+-spec setopt(Socket, Opt, Value) -> Result when
+      Socket :: insock(),
+      Opt :: atom(),
+      Value :: term(),
+      Result :: ok | {error, Reason :: term()}.
 setopt(S, Opt, Value) when is_port(S) -> 
     setopts(S, [{Opt,Value}]).
 
+%%--------------------------------------------------------------------
+%%
+%% SETOPTS(insock(), [{Opt,Value}]) -> ok | {error, Reason}
+%%
+%%--------------------------------------------------------------------
+-spec setopts(Socket, Opts) -> Result when
+      Socket :: insock(),
+      Opts :: [{Opt, Value}, ...],
+      Opt :: atom(),
+      Value :: term(),
+      Result :: ok | {error, Reason :: term()}.
 setopts(S, Opts) when is_port(S) ->
     case encode_opt_val(Opts) of
 	{ok, Buf} ->
@@ -931,20 +1312,37 @@ setopts(S, Opts) when is_port(S) ->
 	Error  -> Error
     end.	    
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% GETOPT(insock(), Opt) -> {ok,Value} | {error, Reason}
-%% GETOPTS(insock(), [Opt]) -> {ok, [{Opt,Value}]} | {error, Reason}
 %% get socket, ip and driver option
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%%--------------------------------------------------------------------
+-spec getopt(Socket, Opt) -> Result when
+      Socket :: insock(),
+      Opt :: atom(),
+      Result :: {ok, Value} | {error, Reason},
+      Value :: term(),
+      Reason :: term().
 getopt(S, Opt) when is_port(S), is_atom(Opt) ->
     case getopts(S, [Opt]) of
 	{ok,[{_,Value}]} -> {ok, Value};
 	Error -> Error
     end.
 
+%%--------------------------------------------------------------------
+%%
+%% GETOPTS(insock(), [Opt]) -> {ok, [{Opt,Value}]} | {error, Reason}
+%%
+%%--------------------------------------------------------------------
+-spec getopts(Socket, Opts) -> Result when
+      Socket :: insock(),
+      Opts :: [Opt, ...],
+      Opt :: atom(),
+      Result :: {ok, Opts} | {error, Reason},
+      Opts :: [{Opt, Value}, ...],
+      Value :: term(),
+      Reason :: term().
 getopts(S, Opts) when is_port(S), is_list(Opts) ->
     case encode_opts(Opts) of
 	{ok,Buf} ->
@@ -962,20 +1360,35 @@ getopts(S, Opts) when is_port(S), is_list(Opts) ->
 	Error -> Error
     end.
     
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% CHGOPT(insock(), Opt) -> {ok,Value} | {error, Reason}
-%% CHGOPTS(insock(), [Opt]) -> {ok, [{Opt,Value}]} | {error, Reason}
 %% change socket, ip and driver option
 %%
 %% Same as setopts except for record value options where undefined
 %% fields are read with getopts before setting.
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%%--------------------------------------------------------------------
+-spec chgopt(Socket, Opt, Value) -> Result when
+      Socket :: insock(),
+      Opt :: atom(),
+      Value :: term(),
+      Result :: {ok,Value :: term()} | {error, Reason :: term()}.
 chgopt(S, Opt, Value) when is_port(S) -> 
     chgopts(S, [{Opt,Value}]).
 
+%%--------------------------------------------------------------------
+%%
+%% CHGOPTS(insock(), [Opt]) -> {ok, [{Opt,Value}]} | {error, Reason}
+%%
+%%--------------------------------------------------------------------
+-spec chgopts(Socket, Opts) -> Result when
+      Socket :: insock(),
+      Opts :: [Opt, ...],
+      Opt :: atom(),
+      Result :: {ok, [{Opt, Value}, ...]} | {error, Reason},
+      Value :: term(),
+      Reason :: term().
 chgopts(S, Opts) when is_port(S), is_list(Opts) ->
     case getopts(S, need_template(Opts)) of
 	{ok,Templates} ->
@@ -988,7 +1401,7 @@ chgopts(S, Opts) when is_port(S), is_list(Opts) ->
 	Error -> Error
     end.
     
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% getifaddrs(insock()) -> {ok,IfAddrsList} | {error, Reason}
 %%
@@ -1002,8 +1415,14 @@ chgopts(S, Opts) when is_port(S), is_list(Opts) ->
 %%
 %% get interface name and addresses list
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%%--------------------------------------------------------------------
+-spec getifaddrs(Socket) -> Result when
+      Socket :: insock(),
+      Result :: {ok, IfAddrsList} | {error, Reason},
+      IfAddrsList :: [{Name, Opts}, ...],
+      Name :: string(),
+      Opts :: [tuple(), ...],
+      Reason :: term().
 getifaddrs(S) when is_port(S) ->
     case ctl_cmd(S, ?INET_REQ_GETIFADDRS, []) of
         {ok, Data} ->
@@ -1017,11 +1436,31 @@ getifaddrs(S) when is_port(S) ->
 	Err2 -> Err2
     end.
 
+%%--------------------------------------------------------------------
+%% @comp_ifaddrs/1
 %% Restructure interface properties per interface
-
+%%--------------------------------------------------------------------
+-spec comp_ifaddrs(IfOpts) -> Result when
+      IfOpts :: [IfOpt, ...],
+      IfOpt :: {If, Opts},
+      If :: term(),
+      Opts :: [Opt, ...],
+      Opt :: {atom(), term()},
+      Result :: term().
 comp_ifaddrs(IfOpts) ->
     comp_ifaddrs(IfOpts, ktree_empty()).
-%%
+
+%%--------------------------------------------------------------------
+%% @doc comp_ifaddrs/2
+%%--------------------------------------------------------------------
+-spec comp_ifaddrs(IfOpts, IfT) -> Result when
+      IfOpts :: [IfOpt, ...],
+      IfOpt :: {If, Opts},
+      If :: term(),
+      Opts :: [Opt, ...],
+      Opt :: {atom(), term()},
+      IfT :: term(),
+      Result :: term().
 comp_ifaddrs([{If,[{flags,Flags}|Opts]}|IfOpts], IfT) ->
     case ktree_is_defined(If, IfT) of
         true ->
@@ -1042,6 +1481,14 @@ comp_ifaddrs([{If,[{flags,Flags}|Opts]}|IfOpts], IfT) ->
 comp_ifaddrs([], IfT) ->
     comp_ifaddrs_2(ktree_keys(IfT), IfT).
 
+%%--------------------------------------------------------------------
+%% @doc comp_ifaddrs_flags/3
+%%--------------------------------------------------------------------
+-spec comp_ifaddrs_flags(Flags, Opts, FlagsT) -> Result when
+      Flags :: term(),
+      Opts :: term(),
+      FlagsT :: term(),
+      Result :: term().
 comp_ifaddrs_flags(Flags, Opts, FlagsT) ->
     case ktree_is_defined(Flags, FlagsT) of
         true ->
@@ -1053,23 +1500,53 @@ comp_ifaddrs_flags(Flags, Opts, FlagsT) ->
             ktree_insert(Flags, rev(Opts), FlagsT)
     end.
 
+%%--------------------------------------------------------------------
+%% @doc comp_ifaddrs_2/2
+%%--------------------------------------------------------------------
+-spec comp_ifaddrs_2(Ifs, IfT) -> Result when
+      Ifs :: [If, ...],
+      If :: term(),
+      IfT :: term(),
+      Result :: [tuple(), ...] | [].
 comp_ifaddrs_2([If|Ifs], IfT) ->
     FlagsT = ktree_get(If, IfT),
     [{If,comp_ifaddrs_3(ktree_keys(FlagsT), FlagsT)}
      | comp_ifaddrs_2(Ifs, IfT)];
 comp_ifaddrs_2([], _IfT) ->
     [].
-%%
+
+%%--------------------------------------------------------------------
+%% @doc comp_ifaddrs_3/2
+%%--------------------------------------------------------------------
+-spec comp_ifaddrs_3(Flags, FlagsT) -> Result when
+      Flags :: [Flag, ...],
+      Flag :: {flags, term()},
+      FlagsT :: term(),
+      Result :: [].
 comp_ifaddrs_3([Flags|FlagsL], FlagsT) ->
     [{flags,Flags}|hwaddr_last(rev(ktree_get(Flags, FlagsT)))]
         ++ hwaddr_last(comp_ifaddrs_3(FlagsL, FlagsT));
 comp_ifaddrs_3([], _FlagsT) ->
     [].
 
+%%--------------------------------------------------------------------
+%% @doc hwaddr_last/1
 %% Place hwaddr last to look more like legacy emulation
+%%--------------------------------------------------------------------
+-spec hwaddr_last(Opts) -> Result when
+      Opts :: term(),
+      Result :: term().
 hwaddr_last(Opts) ->
     hwaddr_last(Opts, Opts, []).
-%%
+
+%%--------------------------------------------------------------------
+%% @doc hwaddr_last/3
+%%--------------------------------------------------------------------
+-spec hwaddr_last(Opts, L, R) -> Result when
+      Opts :: list(),
+      L :: list(),
+      R :: list(),
+      Result :: term().
 hwaddr_last([{hwaddr,_} = Opt|Opts], L, R) ->
     hwaddr_last(Opts, L, [Opt|R]);
 hwaddr_last([_|Opts], L, R) ->
@@ -1078,7 +1555,14 @@ hwaddr_last([], L, []) ->
     L;
 hwaddr_last([], L, R) ->
     rev(hwaddr_last(L, []), rev(R)).
-%%
+
+%%--------------------------------------------------------------------
+%% @doc hwaddr_last/2
+%%--------------------------------------------------------------------
+-spec hwaddr_last(Opts, R) -> Result when
+      Opts :: list(),
+      R :: list(),
+      Result :: list().
 hwaddr_last([{hwaddr,_}|Opts], R) ->
     hwaddr_last(Opts, R);
 hwaddr_last([Opt|Opts], R) ->
@@ -1086,9 +1570,14 @@ hwaddr_last([Opt|Opts], R) ->
 hwaddr_last([], R) ->
     R.
 
-
+%%--------------------------------------------------------------------
+%% @doc getifaddrs_ifget/2
 %% Legacy emulation of getifaddrs
-
+%%--------------------------------------------------------------------
+-spec getifaddrs_ifget(Socket, IFs) -> Result when
+      Socket :: insock(),
+      IFs :: list(),
+      Result :: list().
 getifaddrs_ifget(_, []) -> [];
 getifaddrs_ifget(S, [IF|IFs]) ->
     case ifget(S, IF, [flags]) of
@@ -1110,6 +1599,16 @@ getifaddrs_ifget(S, [IF|IFs]) ->
 	    getifaddrs_ifget(S, IFs, IF, [], [addr,netmask,hwaddr])
     end.
 
+%%--------------------------------------------------------------------
+%% @doc getifaddrs_ifget/5
+%%--------------------------------------------------------------------
+-spec getifaddrs_ifget(Socket, IFs, IF, FlagsVals, Opts) -> Result when
+      Socket :: insock(),
+      IFs :: list(),
+      IF :: term(),
+      FlagsVals :: list(),
+      Opts :: list(),
+      Result :: {ok, list()} | [].
 getifaddrs_ifget(S, IFs, IF, FlagsVals, Opts) ->
     OptVals =
 	case ifget(S, IF, Opts) of
@@ -1118,28 +1617,37 @@ getifaddrs_ifget(S, IFs, IF, FlagsVals, Opts) ->
 	end,
     [{IF,FlagsVals++OptVals}|getifaddrs_ifget(S, IFs)].
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% getiflist(insock()) -> {ok,IfNameList} | {error, Reason}
 %%
 %% get interface name list
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%%--------------------------------------------------------------------
+-spec getiflist(Socket) -> Result when
+      Socket :: insock(),
+      Result :: {ok, list()} | {error, Reason},
+      Reason :: term().
 getiflist(S) when is_port(S) ->
     case ctl_cmd(S, ?INET_REQ_GETIFLIST, []) of
 	{ok, Data} -> {ok, build_iflist(Data)};
 	{error,_}=Error -> Error
     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% ifget(insock(), IFOpts) -> {ok,IfNameList} | {error, Reason}
 %%
 %% get interface name list
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%%--------------------------------------------------------------------
+-spec ifget(Socket, Name, Opts) -> Result when
+      Socket :: insock(),
+      Name :: term(),
+      Opts :: list(),
+      Result :: {ok, IfNameList} | {error, Reason},
+      IfNameList :: list(),
+      Reason :: term().
 ifget(S, Name, Opts) ->
     case encode_ifname(Name) of
 	{ok, Buf1} ->
@@ -1154,14 +1662,20 @@ ifget(S, Name, Opts) ->
 	Error -> Error
     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% ifset(insock(), Name, IFOptVals) -> {ok,IfNameList} | {error, Reason}
 %%
 %% set interface parameters
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%%--------------------------------------------------------------------
+-spec ifset(Socket, Name, IFOptVals) -> Result when
+      Socket :: insock(),
+      Name :: term(),
+      IFOptVals :: list(),
+      Result :: {ok, IfNameList} | {error, Reason},
+      IfNameList :: list(),
+      Reason :: term().
 ifset(S, Name, Opts) ->
     case encode_ifname(Name) of
 	{ok, Buf1} ->
@@ -1176,7 +1690,7 @@ ifset(S, Name, Opts) ->
 	Error -> Error
     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% subscribe(insock(), SubsList) -> {ok,StatReply} | {error, Reason}
 %%
@@ -1190,8 +1704,13 @@ ifset(S, Name, Opts) ->
 %%                     removed. If N = 0, the queue is empty and no
 %%                     subscription is made.
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%%--------------------------------------------------------------------
+-spec subscribe(Socket, Sub) -> Result when
+      Socket :: insock(),
+      Sub :: list(),
+      Result :: {ok, StatReply} | {error, Reason},
+      StatReply :: term(),
+      Reason :: term().
 subscribe(S, Sub) when is_port(S), is_list(Sub) ->
     case encode_subs(Sub) of
 	{ok, Bytes} ->
@@ -1202,14 +1721,19 @@ subscribe(S, Sub) when is_port(S), is_list(Sub) ->
 	Error -> Error
     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% GETSTAT(insock(), StatList) -> {ok,StatReply} | {error, Reason}
 %%
 %% get socket statistics (from driver)
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%%--------------------------------------------------------------------
+-spec getstat(Socket, StatList) -> Result when
+      Socket :: insock(),
+      StatList :: list(),
+      Result :: {ok, StatReply} | {error, Reason},
+      StatReply :: term(),
+      Reason :: term().
 getstat(S, Stats) when is_port(S), is_list(Stats) ->
     case encode_stats(Stats) of
 	{ok, Bytes} ->
@@ -1220,28 +1744,35 @@ getstat(S, Stats) when is_port(S), is_list(Stats) ->
 	Error -> Error
     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% GETFD(insock()) -> {ok,integer()} | {error, Reason}
 %%
 %% get internal file descriptor
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%%--------------------------------------------------------------------
+-spec getfd(Socket) -> Result when
+      Socket :: insock(),
+      Result :: {ok, integer()} | {error, Reason},
+      Reason :: term().
 getfd(S) when is_port(S) ->
     case ctl_cmd(S, ?INET_REQ_GETFD, []) of
 	{ok, [S3,S2,S1,S0]} -> {ok, ?u32(S3,S2,S1,S0)};
 	{error,_}=Error -> Error
     end.        
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% IGNOREFD(insock(),boolean()) -> {ok,integer()} | {error, Reason}
 %%
 %% steal internal file descriptor
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%%--------------------------------------------------------------------
+-spec ignorefd(Socket, Bool) -> Result when
+      Socket :: insock(),
+      Bool :: boolean(),
+      Result :: {ok, integer()} | {error, Reason},
+      Reason :: term().
 ignorefd(S,Bool) when is_port(S) ->
     Val = if Bool -> 1; true -> 0 end,
     case ctl_cmd(S, ?INET_REQ_IGNOREFD, [Val]) of
@@ -1249,26 +1780,33 @@ ignorefd(S,Bool) when is_port(S) ->
 	Error -> Error
     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% GETIX(insock()) -> {ok,integer()} | {error, Reason}
 %%
 %% get internal socket index
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%%--------------------------------------------------------------------
+-spec getindex(Socket) -> Result when
+      Socket :: insock(),
+      Result :: {error, einval}.
 getindex(S) when is_port(S) ->
     %% NOT USED ANY MORE
     {error, einval}.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% GETTYPE(insock()) -> {ok,{Family,Type}} | {error, Reason}
 %%
 %% get family/type of a socket
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%%--------------------------------------------------------------------
+-spec gettype(Socket) -> Result when
+      Socket :: insock(),
+      Result :: {ok, {Family, Type}} | {error, Reason},
+      Family :: list(),
+      Type :: atom(),
+      Reason :: term().
 gettype(S) when is_port(S) ->
     case ctl_cmd(S, ?INET_REQ_GETTYPE, []) of
 	{ok, [F3,F2,F1,F0,T3,T2,T1,T0]} ->
@@ -1287,6 +1825,12 @@ gettype(S) when is_port(S) ->
 	{error,_}=Error -> Error
     end.
 
+%%--------------------------------------------------------------------
+%% @doc getprotocol/1
+%%--------------------------------------------------------------------
+-spec getprotocol(Socket) -> Result when
+      Socket :: insock(),
+      Result :: term().
 getprotocol(S) when is_port(S) ->
     {name,Drv} = erlang:port_info(S, name),
     drv2protocol(Drv).
@@ -1300,14 +1844,18 @@ getprotocol(S) when is_port(S) ->
 %% 	_		     -> false
 %%     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% GETSTATUS(insock()) -> {ok,Status} | {error, Reason}
 %%
 %% get socket status
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%%--------------------------------------------------------------------
+-spec getstatus(Socket) -> Result when
+      Socket :: insock(),
+      Result :: {ok, Status} | {error, Reason},
+      Status :: term(),
+      Reason :: term().
 getstatus(S) when is_port(S) ->
     case ctl_cmd(S, ?INET_REQ_GETSTATUS, []) of
 	{ok, [S3,S2,S1,S0]} ->	
@@ -1315,25 +1863,29 @@ getstatus(S) when is_port(S) ->
 	{error,_}=Error -> Error
     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% GETHOSTNAME(insock()) -> {ok,HostName} | {error, Reason}
 %%
 %% get host name
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%%--------------------------------------------------------------------
+-spec gethostname(S :: insock()) 
+                 -> {ok, Hostname :: string()} |
+                    {error, Reason :: term()}.
 gethostname(S) when is_port(S) ->
     ctl_cmd(S, ?INET_REQ_GETHOSTNAME, []).
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% GETSERVBYNAME(insock(),Name,Proto) -> {ok,Port} | {error, Reason}
 %%
 %% get service port
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%%--------------------------------------------------------------------
+-spec getservbyname(S :: insock(), Name :: atom(), Proto :: atom())
+                   -> {ok, Port :: integer()} |
+                      {error, Reason :: term()}.
 getservbyname(S,Name,Proto) when is_port(S), is_atom(Name), is_atom(Proto) ->
     getservbyname1(S, atom_to_list(Name), atom_to_list(Proto));
 getservbyname(S,Name,Proto) when is_port(S), is_atom(Name), is_list(Proto) ->
@@ -1345,6 +1897,10 @@ getservbyname(S,Name,Proto) when is_port(S), is_list(Name), is_list(Proto) ->
 getservbyname(_,_, _) ->
     {error, einval}.
 
+%%--------------------------------------------------------------------
+%% @doc getservbyname1/3
+%%--------------------------------------------------------------------
+-spec getservbyname1(S :: insock(), Name :: string(), Proto :: string()) -> {ok, integer()} | {error, Reason :: term()}.
 getservbyname1(S,Name,Proto) ->
     L1 = length(Name),
     L2 = length(Proto),
@@ -1359,14 +1915,16 @@ getservbyname1(S,Name,Proto) ->
 	    end
     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% GETSERVBYPORT(insock(),Port,Proto) -> {ok,Port} | {error, Reason}
 %%
 %% get service port from portnumber and protocol
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%%--------------------------------------------------------------------
+-spec getservbyport(S :: insock(), Port :: atom() | string(), Proto :: term())
+                   -> {ok, Port :: integer()} |
+                      {error, Reason :: term()}.
 getservbyport(S,Port,Proto) when is_port(S), is_atom(Proto) ->
     getservbyport1(S, Port, atom_to_list(Proto));
 getservbyport(S,Port,Proto) when is_port(S), is_list(Proto) ->
@@ -1374,6 +1932,9 @@ getservbyport(S,Port,Proto) when is_port(S), is_list(Proto) ->
 getservbyport(_, _, _) ->
     {error, einval}.
 
+-spec getservbyport1(S :: insock(), Port :: atom() | string(), Proto :: atom())
+                    -> {ok, Port :: integer()} |
+                       {error, Reason :: term()}.
 getservbyport1(S,Port,Proto) ->
     L = length(Proto),
     if Port < 0 -> {error, einval};
@@ -1386,35 +1947,36 @@ getservbyport1(S,Port,Proto) ->
 	    end
     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%% 
-%% UNRECV(insock(), data) -> ok | {error, Reason}
+%%--------------------------------------------------------------------
+%% @doc unrecv function is a wrapper around ctl_cmd/3 function
+%% returning only the status of the command.
 %%
-%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%% @see ctl_cmd/3
+%%--------------------------------------------------------------------
+-spec unrecv(S :: insock(), Data :: term()) -> ok | {error, Reason :: term()}.
 unrecv(S, Data) ->
     case ctl_cmd(S, ?TCP_REQ_UNRECV, Data) of
 	{ok, _} -> ok;
 	{error,_}=Error  -> Error
     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
+%% @doc detach/1 unlink a socket by calling unlink/1.
 %%
-%% DETACH(insock()) -> ok
-%%
-%%   unlink from a socket 
-%%
-%% ATTACH(insock()) -> ok | {error, Reason}
-%%
-%%   link and connect to a socket 
-%%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
+%% @see unlink/1
+%%--------------------------------------------------------------------
+-spec detach(S :: insock()) -> ok.
 detach(S) when is_port(S) ->
     unlink(S),
     ok.
 
+%%--------------------------------------------------------------------
+%% @doc attach/1 link and connect to a socket by using
+%% erlang:port_connect/2
+%%
+%% @see erlang:port_connect/2
+%%--------------------------------------------------------------------
+-spec attach(S :: insock()) -> ok | {error, Reason :: term()}.
 attach(S) when is_port(S) ->
     try erlang:port_connect(S, self()) of
 	true -> link(S), ok
@@ -1422,12 +1984,16 @@ attach(S) when is_port(S) ->
 	error:Reason -> {error,Reason}
     end.
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 %%
 %% INTERNAL FUNCTIONS
 %%
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%--------------------------------------------------------------------
 
+%%--------------------------------------------------------------------
+%% @doc is_sockopt_val/2
+%%--------------------------------------------------------------------
+-spec is_sockopt_val(Opt :: term(), Val :: term()) -> boolean().
 is_sockopt_val(Opt, Val) ->
     Type = type_opt(set, Opt),
     try type_value(set, Type, Val)
@@ -1435,9 +2001,11 @@ is_sockopt_val(Opt, Val) ->
 	_ -> false
     end.
 
-%%
+%%--------------------------------------------------------------------
+%% @doc enc_opt/1
 %% Socket options processing: Encoding option NAMES:
-%%
+%%--------------------------------------------------------------------
+-spec enc_opt(atom()) -> term().
 enc_opt(reuseaddr)       -> ?INET_OPT_REUSEADDR;
 enc_opt(keepalive)       -> ?INET_OPT_KEEPALIVE;
 enc_opt(dontroute)       -> ?INET_OPT_DONTROUTE;
@@ -1500,11 +2068,11 @@ enc_opt(sctp_events)		   -> ?SCTP_OPT_EVENTS;
 enc_opt(sctp_delayed_ack_time)	   -> ?SCTP_OPT_DELAYED_ACK_TIME;
 enc_opt(sctp_status)		   -> ?SCTP_OPT_STATUS;
 enc_opt(sctp_get_peer_addr_info)   -> ?SCTP_OPT_GET_PEER_ADDR_INFO.
-%%
 
-%%
+%%--------------------------------------------------------------------
 %% Decoding option NAMES:
-%%
+%%--------------------------------------------------------------------
+-spec dec_opt(term()) -> atom().
 dec_opt(?INET_OPT_REUSEADDR)      -> reuseaddr;
 dec_opt(?INET_OPT_KEEPALIVE)      -> keepalive;
 dec_opt(?INET_OPT_DONTROUTE)      -> dontroute;
@@ -1551,8 +2119,7 @@ dec_opt(?INET_OPT_RAW)              -> raw;
 dec_opt(?INET_OPT_BIND_TO_DEVICE) -> bind_to_device;
 dec_opt(I) when is_integer(I)     -> undefined.
 
-
-
+%%--------------------------------------------------------------------
 %% Metatypes:
 %% []              Value must be 'undefined' or nonexistent
 %%                 for setopts and getopts.
@@ -1568,7 +2135,8 @@ dec_opt(I) when is_integer(I)     -> undefined.
 %% And record fields does not call enc_value/2 nor type_value/2.
 %% Anyone introducing these metatypes otherwhere will have to activate
 %% those clauses in enc_value/2 and type_value/2. You have been warned!
-
+%%--------------------------------------------------------------------
+-spec type_opt(atom(), atom()) -> list() | tuple().
 type_opt(get, raw) -> [{[int],[int],[binary_or_uint]}];
 type_opt(_,   raw) -> {int,int,binary};
 %% NB: "sctp_status" and "sctp_get_peer_addr_info" are read-only options,
@@ -1585,8 +2153,17 @@ type_opt(get, sctp_get_peer_addr_info) ->
 type_opt(_,   Opt) ->
     type_opt_1(Opt).
 
-%% Types of option values, by option name:
+%%--------------------------------------------------------------------
+%% @doc type_opt_1/1 
+%% SCTP options (to be set). If the type is a record type, the corresponding
+%% record signature is returned, otherwise, an "elementary" type tag 
+%% is returned:
+%% 
+%% for SCTP_OPT_RTOINFO
 %%
+%% Types of option values, by option name:
+%%--------------------------------------------------------------------
+-spec type_opt_1(atom()) -> boolean() | {boolean(), integer()} | tuple().
 type_opt_1(reuseaddr)       -> bool;
 type_opt_1(keepalive)       -> bool;
 type_opt_1(dontroute)       -> bool;
@@ -1657,12 +2234,7 @@ type_opt_1(read_packets)    -> uint;
 type_opt_1(netns)           -> binary;
 type_opt_1(show_econnreset) -> bool;
 type_opt_1(bind_to_device)  -> binary;
-%% 
-%% SCTP options (to be set). If the type is a record type, the corresponding
-%% record signature is returned, otherwise, an "elementary" type tag 
-%% is returned:
-%% 
-%% for SCTP_OPT_RTOINFO
+
 type_opt_1(sctp_rtoinfo) ->
     [{record,#sctp_rtoinfo{
 	assoc_id = [[sctp_assoc_id,0]],
@@ -1763,9 +2335,11 @@ type_opt_1(sctp_delayed_ack_time) ->
 type_opt_1(undefined)         -> undefined;
 type_opt_1(O) when is_atom(O) -> undefined.
 
-
-
+%%--------------------------------------------------------------------
+%% @doc type_value/2
 %% Get. No supplied value.
+%%--------------------------------------------------------------------
+-spec type_value(get, Value :: undefined | [{record, Record :: tuple()}]) -> boolean().
 type_value(get, undefined)        -> false; % Undefined type
 %% These two clauses cannot happen since they are only used
 %% in record fields - from record fields they must have a
@@ -1780,7 +2354,11 @@ type_value(get, [{record,Types}]) ->        % Implied default value for record
 type_value(get, [_])              -> false; % Required value missing
 type_value(get, _)                -> true.  % Field is supposed to be undefined
 
+%%--------------------------------------------------------------------
+%% @doc type_value/3
 %% Get and set. Value supplied.
+%%--------------------------------------------------------------------
+-spec type_value(Q :: any(), Type :: any(), Value :: any()) -> boolean().
 type_value(_, undefined, _)   -> false;     % Undefined type
 type_value(_, [], undefined)  -> true;      % Ignored
 type_value(_, [], _)          -> false;     % Value should not be supplied
@@ -1791,6 +2369,10 @@ type_value(set, Type, Value)  ->            % Required for setopts
 type_value(_, _, undefined) -> true;        % Value should be undefined for
 type_value(_, _, _)         -> false.       %   other than setopts.
 
+%%--------------------------------------------------------------------
+%% @doc type_value_default/3
+%%--------------------------------------------------------------------
+-spec type_value_default(Q :: any(), Type :: any(), Value :: any()) -> boolean().
 type_value_default(Q, [Type,Default], undefined) ->
     type_value_1(Q, Type, Default);
 type_value_default(Q, [Type,_], Value) ->
@@ -1798,6 +2380,10 @@ type_value_default(Q, [Type,_], Value) ->
 type_value_default(Q, Type, Value) ->
     type_value_1(Q, Type, Value).
 
+%%--------------------------------------------------------------------
+%% @doc type_value_1/3.
+%%--------------------------------------------------------------------
+-spec type_value_1(Q :: any(), {record, tuple()}, Values :: any()) -> boolean().
 type_value_1(Q, {record,Types}, undefined) ->
     type_value_record(Q, Types,
 		      erlang:make_tuple(tuple_size(Types), undefined), 2);
@@ -1810,12 +2396,20 @@ type_value_1(Q, Types, Values)
 type_value_1(_, Type, Value) ->
     type_value_2(Type, Value).
 
+%%--------------------------------------------------------------------
+%% @doc type_value_tuple/4
+%%--------------------------------------------------------------------
+-spec type_value_tuple(Q :: any(), Types :: tuple(), Values :: any(), N :: integer()) -> boolean().
 type_value_tuple(Q, Types, Values, N)
   when is_integer(N), N =< tuple_size(Types) ->
     type_value(Q, element(N, Types), element(N, Values)) 
 	andalso type_value_tuple(Q, Types, Values, N+1);
 type_value_tuple(_, _, _, _) -> true.
 
+%%--------------------------------------------------------------------
+%% @doc type_value_record/4.
+%%--------------------------------------------------------------------
+-spec type_value_record(Q :: any(), Types :: tuple(), Values :: any(), N :: integer()) -> boolean().
 type_value_record(Q, Types, Values, N)
   when is_integer(N), N =< tuple_size(Types) ->
     case type_value(Q, element(N, Types), element(N, Values)) of
@@ -1825,11 +2419,16 @@ type_value_record(Q, Types, Values, N)
     end;
 type_value_record(_, _, _, _) -> true.
 
+%%--------------------------------------------------------------------
+%% @doc type_value_2/2.
+%%
 %% Simple run-time type-checking of (option) values: type -vs- value:
 %% NB: the LHS is the TYPE, not the option name!
 %% 
 %% Returns true | false | throw(ErrorReason) only for record types
 %% 
+%%--------------------------------------------------------------------
+-spec type_value_2(atom(), boolean() | atom() | term()) -> boolean().
 type_value_2(undefined, _)                            -> false;
 %% 
 type_value_2(bool, true)                              -> true;
@@ -1930,22 +2529,31 @@ type_value_2(sctp_assoc_id, X)
 type_value_2(_, _)         -> false.
 
 
-
+%%--------------------------------------------------------------------
+%% @doc enc_value/2.
+%%
 %% Get. No supplied value.
 %%
 %% These two clauses cannot happen since they are only used
 %% in record fields - from record fields they must have a
 %% value though it might be 'undefined', so record fields
 %% calls enc_value/3, not enc_value/2.
+%%
+%%--------------------------------------------------------------------
 %% enc_value(get, [])               -> [];  % Ignored
 %% enc_value(get, [[Type,Default]]) ->      % Required field, default value
 %%     enc_value(get, Type, Default);
+-spec enc_value(get, [{record, Types :: tuple()}]) -> [] | tuple().
 enc_value(get, [{record,Types}]) ->      % Implied default value for record
     enc_value_tuple(get, Types, 
 		    erlang:make_tuple(tuple_size(Types), undefined), 2);
 enc_value(get, _)                -> [].
-    
+
+%%--------------------------------------------------------------------
+%% @doc enc_value/3
 %% Get and set
+%%--------------------------------------------------------------------
+-spec enc_value(atom(), list(), Value :: term()) -> [] | term().
 enc_value(_,   [], _)         -> [];     % Ignored
 enc_value(Q,   [Type], Value) ->         % Required field, proceed
     enc_value_default(Q, Type, Value);
@@ -1953,6 +2561,10 @@ enc_value(set, Type, Value)   ->         % Required for setopts
     enc_value_default(set, Type, Value);
 enc_value(_, _, _)            -> [].     % Not encoded for other than setopts
 
+%%--------------------------------------------------------------------
+%% @doc enc_value_default/3.
+%%--------------------------------------------------------------------
+-spec enc_value_default(Q :: term(), list(), Value :: atom() | term()) -> list().
 enc_value_default(Q, [Type,Default], undefined) ->
     enc_value_1(Q, Type, Default);
 enc_value_default(Q, [Type,_], Value) ->
@@ -1960,6 +2572,9 @@ enc_value_default(Q, [Type,_], Value) ->
 enc_value_default(Q, Type, Value) ->
     enc_value_1(Q, Type, Value).
 
+%%--------------------------------------------------------------------
+%% @doc enc_value_1/3.
+%%--------------------------------------------------------------------
 enc_value_1(Q, {record,Types}, undefined) ->
     enc_value_tuple(Q, Types, 
 		    erlang:make_tuple(tuple_size(Types), undefined), 2);
@@ -1971,15 +2586,19 @@ enc_value_1(Q, Types, Values) when tuple_size(Types) =:= tuple_size(Values) ->
 enc_value_1(_, Type, Value) ->
     enc_value_2(Type, Value).
 
+%%--------------------------------------------------------------------
+%% @doc enc_value_tuple/4
+%%--------------------------------------------------------------------
 enc_value_tuple(Q, Types, Values, N)
   when is_integer(N), N =< tuple_size(Types) ->
     [enc_value(Q, element(N, Types), element(N, Values))
      |enc_value_tuple(Q, Types, Values, N+1)];
 enc_value_tuple(_, _, _, _) -> [].
 
-%%
+%%--------------------------------------------------------------------
+%% @doc enc_value_2/2
 %% Encoding of option VALUES:
-%%
+%%--------------------------------------------------------------------
 enc_value_2(bool, true)     -> [0,0,0,1];
 enc_value_2(bool, false)    -> [0,0,0,0];
 enc_value_2(bool8, true)    -> [1];
@@ -2064,11 +2683,11 @@ enc_value_2(binary_or_uint,Datum) when is_integer(Datum) ->
     [0,enc_value_2(uint, Datum)].
 
 
-
-%%
+%%--------------------------------------------------------------------
+%% @doc dev_value/2
 %% Decoding of option VALUES receved from "getopt":
 %% NOT required for SCTP, as it always returns ready terms, not lists:
-%%
+%%--------------------------------------------------------------------
 dec_value(bool, [0,0,0,0|T])       -> {false,T};
 dec_value(bool, [_,_,_,_|T])       -> {true,T};
 %% Currently not used i.e only used by SCTP that does not dec_value/2
@@ -2122,6 +2741,9 @@ dec_value(Type, Val) ->
 %% dec_value(_, B) ->
 %%     {undefined, B}.
 
+%%--------------------------------------------------------------------
+%% @doc dec_value_tuple/4
+%%--------------------------------------------------------------------
 dec_value_tuple(Types, List, N, Acc)
   when is_integer(N), N =< tuple_size(Types) ->
     {Term,Tail} = dec_value(element(N, Types), List),
@@ -2129,11 +2751,16 @@ dec_value_tuple(Types, List, N, Acc)
 dec_value_tuple(_, List, _, Acc) ->
     {rev(Acc),List}.
 
+%%--------------------------------------------------------------------
+%% @doc borlist/2
+%%--------------------------------------------------------------------
 borlist([V|Vs], Value) ->
     borlist(Vs, V bor Value);
 borlist([], Value) -> Value.
-    
 
+%%--------------------------------------------------------------------
+%% @doc enum_vals/2
+%%--------------------------------------------------------------------
 enum_vals([Enum|Es], List) ->
     case enum_val(Enum, List) of
 	false -> false;
@@ -2141,6 +2768,9 @@ enum_vals([Enum|Es], List) ->
     end;
 enum_vals([], _) -> [].
 
+%%--------------------------------------------------------------------
+%% enum_names/2
+%%--------------------------------------------------------------------
 enum_names(Val, [{Enum,BitVal} |List]) ->
     if Val band BitVal =:= BitVal ->
 	    [Enum | enum_names(Val, List)];
@@ -2148,21 +2778,28 @@ enum_names(Val, [{Enum,BitVal} |List]) ->
 	    enum_names(Val, List)
     end;
 enum_names(_, []) -> [].
-    
+
+%%--------------------------------------------------------------------
+%% @doc enum_val/2
+%%--------------------------------------------------------------------
 enum_val(Enum, [{Enum,Value}|_]) -> {value,Value};
 enum_val(Enum, [_|List]) -> enum_val(Enum, List);
 enum_val(_, []) -> false.
 
+%%--------------------------------------------------------------------
+%% enum_name/2
+%%--------------------------------------------------------------------
 enum_name(Val, [{Enum,Val}|_]) -> {name,Enum};
 enum_name(Val, [_|List]) -> enum_name(Val, List);
 enum_name(_, []) -> false.
 
-
-
+%%--------------------------------------------------------------------
+%% @doc encode_opt_val/1
 %% Encoding for setopts
 %%
 %% encode opt/val REVERSED since options are stored in reverse order
 %% i.e. the recent options first (we must process old -> new)
+%%--------------------------------------------------------------------
 encode_opt_val(Opts) -> 
     try
 	{ok, enc_opt_val(Opts, [])}
@@ -2170,10 +2807,13 @@ encode_opt_val(Opts) ->
 	throw:Reason -> {error,Reason}
     end.
 
+%%--------------------------------------------------------------------
+%% @doc enc_opt_val/2
 %% {active, once} and {active, N} are specially optimized because they will
 %% be used for every packet or every N packets, not only once when
 %% initializing the socket.  Measurements show that this optimization is
 %% worthwhile.
+%%--------------------------------------------------------------------
 enc_opt_val([{active,once}|Opts], Acc) ->
     enc_opt_val(Opts, [<<?INET_LOPT_ACTIVE:8,?INET_ONCE:32>>|Acc]);
 enc_opt_val([{active,N}|Opts], Acc) when is_integer(N), N < 32768, N >= -32768 ->
@@ -2191,6 +2831,9 @@ enc_opt_val([_|_], _) ->
 enc_opt_val([], Acc) ->
     Acc.
 
+%%--------------------------------------------------------------------
+%% @doc enc_opt_val/4
+%%--------------------------------------------------------------------
 enc_opt_val(Opts, Acc, Opt, Val) when is_atom(Opt) ->
     Type = type_opt(set, Opt),
     case type_value(set, Type, Val) of
@@ -2202,12 +2845,13 @@ enc_opt_val(Opts, Acc, Opt, Val) when is_atom(Opt) ->
 enc_opt_val(_, _, _, _) ->
     throw(einval).
 
-
-
+%%--------------------------------------------------------------------
+%% @doc encode_opts/1
 %% Encoding for getopts
 %%
 %% "encode_opts" is for "getopt" only, not setopt". But it uses "enc_opt" which
 %% is common for "getopt" and "setopt":
+%%--------------------------------------------------------------------
 encode_opts(Opts) -> 
     try enc_opts(Opts) of
 	Buf -> {ok,Buf}
@@ -2215,8 +2859,11 @@ encode_opts(Opts) ->
 	Error -> {error,Error}
     end.
 
-% Raw options are a special case, they need to be rewritten to be properly 
-% handled and the types need checking even when querying.
+%%--------------------------------------------------------------------
+%% @doc enc_opts/1
+%% Raw options are a special case, they need to be rewritten to be properly 
+%% handled and the types need checking even when querying.
+%%--------------------------------------------------------------------
 enc_opts([{raw,P,O,S}|Opts]) ->
     enc_opts(Opts, raw, {P,O,S});
 enc_opts([{Opt,Val}|Opts]) ->
@@ -2225,6 +2872,9 @@ enc_opts([Opt|Opts]) ->
     enc_opts(Opts, Opt);
 enc_opts([]) -> [].
 
+%%--------------------------------------------------------------------
+%% @doc enc_opts/2
+%%--------------------------------------------------------------------
 enc_opts(Opts, Opt) when is_atom(Opt) ->
     Type = type_opt(get, Opt),
     case type_value(get, Type) of
@@ -2236,6 +2886,9 @@ enc_opts(Opts, Opt) when is_atom(Opt) ->
 enc_opts(_, _) ->
     throw(einval).
 
+%%--------------------------------------------------------------------
+%% @doc enc_opts/3
+%%--------------------------------------------------------------------
 enc_opts(Opts, Opt, Val) when is_atom(Opt) ->
     Type = type_opt(get, Opt),
     case type_value(get, Type, Val) of
@@ -2247,10 +2900,10 @@ enc_opts(Opts, Opt, Val) when is_atom(Opt) ->
 enc_opts(_, _, _) ->
     throw(einval).
 
-
-
+%%--------------------------------------------------------------------
+%% @doc decode_opt_val/1
 %% Decoding of raw list data options
-%%
+%%--------------------------------------------------------------------
 decode_opt_val(Buf) ->
     try dec_opt_val(Buf) of
 	Result -> {ok,Result}
@@ -2268,6 +2921,9 @@ dec_opt_val([B|Buf]=BBuf) ->
     end;
 dec_opt_val([]) -> [].
 
+%%--------------------------------------------------------------------
+%% @doc dec_opt_val/3
+%%--------------------------------------------------------------------
 dec_opt_val(Buf, raw, Type) ->
     {{P,O,B},T} = dec_value(Type, Buf),
     [{raw,P,O,B}|dec_opt_val(T)];
@@ -2284,12 +2940,14 @@ dec_opt_val(Buf, Opt, Type) ->
     [{Opt,Val}|dec_opt_val(T)].
 
 
-
+%%--------------------------------------------------------------------
+%% @doc need_template/1
 %% Pre-processing of options for chgopts
 %%
 %% Return list of option requests for getopts
 %% for all options that containing 'undefined' record fields.
 %%
+%%--------------------------------------------------------------------
 need_template([{Opt,undefined}=OV|Opts]) when is_atom(Opt) ->
     [OV|need_template(Opts)];
 need_template([{Opt,Val}|Opts]) when is_atom(Opt) ->
@@ -2302,7 +2960,10 @@ need_template([{Opt,Val}|Opts]) when is_atom(Opt) ->
 need_template([_|Opts]) ->
     need_template(Opts);
 need_template([]) -> [].
-%%
+
+%%--------------------------------------------------------------------
+%% @doc need_templates/2
+%%--------------------------------------------------------------------
 need_template(T, N) when is_integer(N), N =< tuple_size(T) ->
     case element(N, T) of
 	undefined -> true;
@@ -2311,9 +2972,12 @@ need_template(T, N) when is_integer(N), N =< tuple_size(T) ->
     end;
 need_template(_, _) -> false.
 
+%%--------------------------------------------------------------------
+%% @doc merge_options/2
 %% Replace 'undefined' record fields in option values with values
 %% from template records.
 %%
+%%--------------------------------------------------------------------
 merge_options([{Opt,undefined}|Opts], [{Opt,_}=T|Templates]) ->
     [T|merge_options(Opts, Templates)];
 merge_options([{Opt,Val}|Opts], [{Opt,Template}|Templates])
@@ -2333,6 +2997,9 @@ merge_options([], []) -> [];
 merge_options(Opts, Templates) ->
     throw({merge,Opts,Templates}).
 
+%%--------------------------------------------------------------------
+%% @doc merge_fields/3
+%%--------------------------------------------------------------------
 merge_fields(Opt, Template, N) when is_integer(N), N =< tuple_size(Opt) ->
     case element(N, Opt) of
 	undefined ->
@@ -2349,6 +3016,9 @@ merge_fields(_, _, _) -> [].
 %%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+%%--------------------------------------------------------------------
+%% @doc type_ifopt/1
+%%--------------------------------------------------------------------
 type_ifopt(addr)      -> sockaddr;
 type_ifopt(broadaddr) -> sockaddr;
 type_ifopt(dstaddr)   -> sockaddr;
@@ -2386,7 +3056,10 @@ dec_ifopt(?INET_IFOPT_FLAGS)     -> flags;
 dec_ifopt(?INET_IFOPT_HWADDR)    -> hwaddr;
 dec_ifopt(I) when is_integer(I)  -> undefined.
 
+%%--------------------------------------------------------------------
+%% @doc decode_ifopts/2
 %% decode if options returns a reversed list
+%%--------------------------------------------------------------------
 decode_ifopts([B | Buf], Acc) ->
     case dec_ifopt(B) of
 	undefined -> 
@@ -2397,7 +3070,9 @@ decode_ifopts([B | Buf], Acc) ->
     end;
 decode_ifopts(_,Acc) -> {ok,Acc}.
 
-
+%%--------------------------------------------------------------------
+%% @doc encode_ifopts/2.
+%%--------------------------------------------------------------------
 %% encode if options return a reverse list
 encode_ifopts([Opt|Opts], Acc) ->
     case enc_ifopt(Opt) of
@@ -2406,7 +3081,9 @@ encode_ifopts([Opt|Opts], Acc) ->
     end;
 encode_ifopts([],Acc) -> {ok,Acc}.
 
-
+%%--------------------------------------------------------------------
+%% @doc encode_ifopt_val/2.
+%%--------------------------------------------------------------------
 %% encode if options return a reverse list
 encode_ifopt_val([{Opt,Val}|Opts], Buf) ->
     Type = type_ifopt(Opt),
@@ -2427,13 +3104,15 @@ encode_ifopt_val([], Buf) -> {ok,Buf}.
 %%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+%%--------------------------------------------------------------------
+%% @doc encode_subs/1.
+%%--------------------------------------------------------------------
 encode_subs(L) ->
     try enc_subs(L) of
 	Result -> {ok,Result}
     catch        
 	Error  -> {error,Error}
     end.
-
 enc_subs([H|T]) ->
     case H of
 	subs_empty_out_q -> [?INET_SUBS_EMPTY_OUT_Q|enc_subs(T)]%;
@@ -2441,7 +3120,9 @@ enc_subs([H|T]) ->
     end;
 enc_subs([]) -> [].
 
-
+%%--------------------------------------------------------------------
+%% @doc decode_subs/1.
+%%--------------------------------------------------------------------
 decode_subs(Bytes) -> 
     try dec_subs(Bytes) of
 	Result -> {ok,Result}
@@ -2449,6 +3130,9 @@ decode_subs(Bytes) ->
 	Error  -> {error,Error}
     end.
 
+%%--------------------------------------------------------------------
+%% @doc dec_subs/1.
+%%--------------------------------------------------------------------
 dec_subs([X,X3,X2,X1,X0|R]) ->
     Val = ?u32(X3,X2,X1,X0),
     case X of
@@ -2463,6 +3147,9 @@ dec_subs([]) -> [].
 %%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+%%--------------------------------------------------------------------
+%% @doc encode_stat/1.
+%%--------------------------------------------------------------------
 encode_stats(L) ->
     try enc_stats(L) of
 	Result -> {ok,Result}
@@ -2470,6 +3157,9 @@ encode_stats(L) ->
 	Error  -> {error,Error}
     end.
 
+%%--------------------------------------------------------------------
+%% @doc enc_stats/1.
+%%--------------------------------------------------------------------
 enc_stats([H|T]) ->
     case H of
 	recv_cnt  -> [?INET_STAT_RECV_CNT |enc_stats(T)];
@@ -2486,7 +3176,9 @@ enc_stats([H|T]) ->
     end;
 enc_stats([]) -> [].
 
-
+%%--------------------------------------------------------------------
+%% @doc decode_stats/1.
+%%--------------------------------------------------------------------
 decode_stats(Bytes) -> 
     try dec_stats(Bytes) of
 	Result -> {ok,Result}
@@ -2494,7 +3186,9 @@ decode_stats(Bytes) ->
 	Error  -> {error,Error}
     end.
 
-
+%%--------------------------------------------------------------------
+%% @doc dec_stats/1.
+%%--------------------------------------------------------------------
 dec_stats([?INET_STAT_SEND_OCT,X7,X6,X5,X4,X3,X2,X1,X0|R]) ->
     Val = ?u64(X7,X6,X5,X4,X3,X2,X1,X0),
     [{send_oct, Val}|dec_stats(R)];
@@ -2522,6 +3216,9 @@ dec_stats([]) -> [].
 %%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+%%--------------------------------------------------------------------
+%% @doc def_status/1.
+%%--------------------------------------------------------------------
 dec_status(Flags) ->
     enum_names(Flags,
 	       [
@@ -2541,9 +3238,15 @@ dec_status(Flags) ->
 %%
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+%%--------------------------------------------------------------------
+%% @doc enc_time/1.
+%%--------------------------------------------------------------------
 enc_time(Time) when Time < 0 -> [255,255,255,255];
 enc_time(Time) -> ?int32(Time).
 
+%%--------------------------------------------------------------------
+%% @doc encode_ifname/1.
+%%--------------------------------------------------------------------
 encode_ifname(Name) when is_atom(Name) -> encode_ifname(atom_to_list(Name));
 encode_ifname(Name) ->
     N = length(Name),
@@ -2551,9 +3254,15 @@ encode_ifname(Name) ->
        true -> {ok,[N | Name]}
     end.
 
+%%--------------------------------------------------------------------
+%% @doc build_ifaddrs/1.
+%%--------------------------------------------------------------------
 build_ifaddrs(Cs) ->
     build_ifaddrs(Cs, []).
-%%
+
+%%--------------------------------------------------------------------
+%% @doc build_ifaddrs/2.
+%%--------------------------------------------------------------------
 build_ifaddrs([], []) ->
     [];
 build_ifaddrs([0|Cs], Acc) ->
@@ -2563,6 +3272,9 @@ build_ifaddrs([0|Cs], Acc) ->
 build_ifaddrs([C|Cs], Acc) ->
     build_ifaddrs(Cs, [C|Acc]).
 
+%%--------------------------------------------------------------------
+%% @doc build_ifaddrs_opts/2.
+%%--------------------------------------------------------------------
 build_ifaddrs_opts([0|Cs], Acc) ->
     {rev(Acc),Cs};
 build_ifaddrs_opts([C|Cs]=CCs, Acc) ->
@@ -2575,9 +3287,15 @@ build_ifaddrs_opts([C|Cs]=CCs, Acc) ->
 	    build_ifaddrs_opts(Rest, [{Opt,Val}|Acc])
     end.
     
+%%--------------------------------------------------------------------
+%% @doc build_iflist/1.
+%%--------------------------------------------------------------------
 build_iflist(Cs) ->
     build_iflist(Cs, [], []).
 
+%%--------------------------------------------------------------------
+%% @doc build_iflist/3.
+%%--------------------------------------------------------------------
 %% Turn a NULL separated list of chars into a list of strings, removing
 %% duplicates.
 build_iflist([0|L], Acc, [H|T]) ->
@@ -2594,40 +3312,95 @@ build_iflist([], [], List) ->
 build_iflist([], Acc, List) ->
     build_iflist([0], Acc, List).
 
+%%--------------------------------------------------------------------
+%% @doc rev/1.
+%%--------------------------------------------------------------------
 rev(L) -> rev(L,[]).
+
+%%--------------------------------------------------------------------
+%% @doc rev/2.
+%%--------------------------------------------------------------------
 rev([C|L],Acc) -> rev(L,[C|Acc]);
 rev([],Acc) -> Acc.
 
+%%--------------------------------------------------------------------
+%% @doc split/2.
+%%--------------------------------------------------------------------
 split(N, L) -> split(N, L, []).
+
+%%--------------------------------------------------------------------
+%% @doc split/3.
+%%--------------------------------------------------------------------
 split(0, L, R) when is_list(L) -> {rev(R),L};
 split(N, [H|T], R) when is_integer(N), N > 0 -> split(N-1, T, [H|R]).
 
+%%--------------------------------------------------------------------
+%% @doc len/2.
+%%--------------------------------------------------------------------
 len(L, N) -> len(L, N, 0).
+
+%%--------------------------------------------------------------------
+%% @doc len/3.
+%%--------------------------------------------------------------------
 len([], N, C) when is_integer(N), N >= 0 -> C;
 len(L, 0, _) when is_list(L) -> undefined;
 len([_|L], N, C) when is_integer(N), N >= 0 -> len(L, N-1, C+1).
 
+%%--------------------------------------------------------------------
+%% @doc member/2.
+%%--------------------------------------------------------------------
 member(X, [X|_]) -> true;
 member(X, [_|Xs]) -> member(X, Xs);
 member(_, []) -> false.
 
-
-
+%%--------------------------------------------------------------------
+%% @doc ktree_empty/0
 %% Lookup tree that keeps key insert order
-
+%%--------------------------------------------------------------------
 ktree_empty() -> {[],tree()}.
+
+%%--------------------------------------------------------------------
+%% @doc ktree_is_defined/2.
+%%--------------------------------------------------------------------
 ktree_is_defined(Key, {_,T}) -> tree(T, Key, is_defined).
+
+%%--------------------------------------------------------------------
+%% @doc ktree_get/2.
+%%--------------------------------------------------------------------
 ktree_get(Key, {_,T}) -> tree(T, Key, get).
+
+%%--------------------------------------------------------------------
+%% @doc ktree_insert/3.
+%%--------------------------------------------------------------------
 ktree_insert(Key, V, {Keys,T}) -> {[Key|Keys],tree(T, Key, {insert,V})}.
+
+%%--------------------------------------------------------------------
+%% @doc ktree_update/3.
+%%--------------------------------------------------------------------
 ktree_update(Key, V, {Keys,T}) -> {Keys,tree(T, Key, {update,V})}.
+
+%%--------------------------------------------------------------------
+%% @doc ktree_keys/1.
+%%--------------------------------------------------------------------
 ktree_keys({Keys,_}) -> rev(Keys).
 
+%%--------------------------------------------------------------------
+%% @doc tree/0.
+%%--------------------------------------------------------------------
+-spec tree() -> nil.
+tree() -> nil.
+
+%%--------------------------------------------------------------------
+%% @doc tree/3
+%%
 %% Simple lookup tree. Hash the key to get statistical balance.
 %% Key is matched equal, not compared equal.
-
-tree() -> nil.
+%%--------------------------------------------------------------------
 tree(T, Key, Op) -> tree(T, Key, Op, erlang:phash2(Key)).
 
+%%--------------------------------------------------------------------
+%% @doc tree/4.
+%%--------------------------------------------------------------------
 tree(nil, _, is_defined, _) -> false;
 tree(nil, K, {insert,V}, _) -> {K,V,nil,nil};
 tree({K,_,_,_}, K, is_defined, _) -> true;
@@ -2649,8 +3422,10 @@ tree({K0,V0,L,R}, K, Op, H) ->
 	    end
     end.
 
-
-
+%%--------------------------------------------------------------------
+%% @doc utf8_to_characters/1.
+%%--------------------------------------------------------------------
+-spec utf8_to_characters(Arg :: list()) -> list().
 utf8_to_characters([]) -> [];
 utf8_to_characters([B|Bs]=Arg) when (B band 16#FF) =:= B ->
     if  16#F8 =< B ->
@@ -2666,25 +3441,48 @@ utf8_to_characters([B|Bs]=Arg) when (B band 16#FF) =:= B ->
 	true ->
 	    [B|utf8_to_characters(Bs)]
     end.
-%%
+
+%%--------------------------------------------------------------------
+%% @doc utf8_to_characters/3.
+%%--------------------------------------------------------------------
+-spec utf8_to_characters(Bs :: any(), U :: any(), N :: integer()) -> list().
 utf8_to_characters(Bs, U, 0) ->
     [U|utf8_to_characters(Bs)];
 utf8_to_characters([B|Bs], U, N) when ((B band 16#3F) bor 16#80) =:= B ->
     utf8_to_characters(Bs, (U bsl 6) bor (B band 16#3F), N-1).
 
+%%--------------------------------------------------------------------
+%% @doc ip4_to_bytes/1.
+%%--------------------------------------------------------------------
+-spec ip4_to_bytes({integer(), integer(), integer(), integer()})
+                   -> [integer(), ...].
 ip4_to_bytes({A,B,C,D}) ->
     [A band 16#ff, B band 16#ff, C band 16#ff, D band 16#ff].
 
+%%--------------------------------------------------------------------
+%% @doc ip6_to_bytes/1.
+%%--------------------------------------------------------------------
+-spec ip6_to_bytes({integer(), integer(), integer(), integer()
+                   ,integer(), integer(), integer(), integer()}) 
+                   -> [integer(), ...].
 ip6_to_bytes({A,B,C,D,E,F,G,H}) ->
     [?int16(A), ?int16(B), ?int16(C), ?int16(D),
      ?int16(E), ?int16(F), ?int16(G), ?int16(H)].
 
+%%--------------------------------------------------------------------
+%% @doc get_addr/1
+%%--------------------------------------------------------------------
+-spec get_addrs(list()) -> [tuple(), ...].
 get_addrs([]) ->
     [];
 get_addrs([F|Addrs]) ->
     {Addr,Rest} = get_addr(F, Addrs),
     [Addr|get_addrs(Rest)].
 
+%%--------------------------------------------------------------------
+%% @doc get_addr/2.
+%%--------------------------------------------------------------------
+-spec get_addr(INET_AF :: atom(), list()) -> tuple().
 get_addr(?INET_AF_LOCAL, [N|Addr]) ->
     {A,Rest} = split(N, Addr),
     {{local,iolist_to_binary(A)},Rest};
@@ -2696,21 +3494,40 @@ get_addr(Family, [P1,P0|Addr]) ->
     {IP,Rest} = get_ip(Family, Addr),
     {{IP,?u16(P1, P0)},Rest}.
 
+%%--------------------------------------------------------------------
+%% @doc get_ip/2.
+%%--------------------------------------------------------------------
+-spec get_ip(atom(), list()) -> {tuple(), list()}.
 get_ip(?INET_AF_INET, Addr) ->
     get_ip4(Addr);
 get_ip(?INET_AF_INET6, Addr) ->
     get_ip6(Addr).
 
+%%--------------------------------------------------------------------
+%% @doc get_ip4/1.
+%%--------------------------------------------------------------------
+-spec get_ip4(list()) 
+             -> {{integer(), integer(), integer(), integer()}, Rest :: list()}.
 get_ip4([A,B,C,D | T]) -> {{A,B,C,D},T}.
 
+%%--------------------------------------------------------------------
+%% @doc get_ip6/1.
+%%--------------------------------------------------------------------
+-spec get_ip6([integer(), ...]) -> { tuple(), Rest :: list() }.
 get_ip6([X1,X2,X3,X4,X5,X6,X7,X8,X9,X10,X11,X12,X13,X14,X15,X16 | T]) ->
     { { ?u16(X1,X2),?u16(X3,X4),?u16(X5,X6),?u16(X7,X8),
 	?u16(X9,X10),?u16(X11,X12),?u16(X13,X14),?u16(X15,X16)},
       T }.
 
--define(ERTS_INET_DRV_CONTROL_MAGIC_NUMBER, 16#03f1a300).
 
+-define(ERTS_INET_DRV_CONTROL_MAGIC_NUMBER, 16#03f1a300).
+%%--------------------------------------------------------------------
+%% @doc ctl_cmd/3.
 %% Control command
+%%--------------------------------------------------------------------
+-spec ctl_cmd(Port :: port(), Cmd :: any(), Args :: list()) 
+             -> {ok, Reply :: term()} |
+                {error, Reason :: term()}.
 ctl_cmd(Port, Cmd, Args) ->
     ?DBG_FORMAT("prim_inet:ctl_cmd(~p, ~p, ~p)~n", [Port,Cmd,Args]),
     Result =
