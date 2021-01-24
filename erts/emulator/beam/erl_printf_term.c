@@ -76,6 +76,22 @@ do {									\
     (CNT) += res__;							\
 } while (0)
 
+#define PRINT_UWORD64(CNT, FN, ARG, C, P, W, I)				\
+do {									\
+    int res__ = erts_printf_uword64((FN), (ARG), (C), (P), (W), (I));	\
+    if (res__ < 0)							\
+	return res__;							\
+    (CNT) += res__;							\
+} while (0)
+
+#define PRINT_SWORD64(CNT, FN, ARG, C, P, W, I)				\
+do {									\
+    int res__ = erts_printf_sword64((FN), (ARG), (C), (P), (W), (I));	\
+    if (res__ < 0)							\
+	return res__;							\
+    (CNT) += res__;							\
+} while (0)
+
 #define PRINT_DOUBLE(CNT, FN, ARG, C, P, W, I)				\
 do {									\
     int res__ = erts_printf_double((FN), (ARG), (C), (P), (W), (I));	\
@@ -83,6 +99,17 @@ do {									\
 	return res__;							\
     (CNT) += res__;							\
 } while (0)
+
+#define PRINT_ATOM(CNT, FN, ARG, ATOM, DCOUNT)              \
+do {                                                        \
+    int res__ = print_atom_name(FN, ARG, ATOM, DCOUNT);     \
+    if (res__ < 0)                                          \
+        return res__;                                       \
+    (CNT) += res__;                                         \
+    if (*(DCOUNT) <= 0)                                     \
+        goto L_done;                                        \
+} while(0)
+
 
 /* CTYPE macros */
 
@@ -335,10 +362,29 @@ print_term(fmtfn_t fn, void* arg, Eterm obj, long *dcount) {
 	if ((*dcount)-- <= 0)
 	    goto L_done;
 
-	if (is_CP(obj)) {
-	    PRINT_STRING(res, fn, arg, "<cp/header:");
-	    PRINT_POINTER(res, fn, arg, cp_val(obj));
-	    PRINT_CHAR(res, fn, arg, '>');
+	if (is_non_value(obj)) {
+            PRINT_STRING(res, fn, arg, "<TNV>");
+	    goto L_done;
+        } else if (is_CP(obj)) {
+            const ErtsCodeMFA* mfa = erts_find_function_from_pc(cp_val(obj));
+            if (mfa) {
+                const UWord *func_start = erts_codemfa_to_code(mfa);
+                const UWord *cp_addr = (UWord*)cp_val(obj);
+
+                PRINT_STRING(res, fn, arg, "<");
+                PRINT_ATOM(res, fn, arg, mfa->module, dcount);
+                PRINT_STRING(res, fn, arg, ":");
+                PRINT_ATOM(res, fn, arg, mfa->function, dcount);
+                PRINT_STRING(res, fn, arg, "/");
+                PRINT_UWORD(res, fn, arg, 'u', 0, 1, (ErlPfUWord) mfa->arity);
+                PRINT_STRING(res, fn, arg, "+");
+                PRINT_UWORD(res, fn, arg, 'u', 0, 1, (ErlPfUWord) (cp_addr - func_start));
+                PRINT_STRING(res, fn, arg, ">");
+            } else {
+                PRINT_STRING(res, fn, arg, "<cp/header:");
+                PRINT_POINTER(res, fn, arg, cp_val(obj));
+                PRINT_CHAR(res, fn, arg, '>');
+            }
 	    goto L_done;
 	}
 	wobj = (Wterm)obj;
@@ -347,14 +393,7 @@ print_term(fmtfn_t fn, void* arg, Eterm obj, long *dcount) {
 	    PRINT_STRING(res, fn, arg, "[]");
 	    break;
 	case ATOM_DEF: {
-	    int tres = print_atom_name(fn, arg, obj, dcount);
-	    if (tres < 0) {
-		res = tres;
-		goto L_done;
-	    }
-	    res += tres;
-	    if (*dcount <= 0)
-		goto L_done;
+            PRINT_ATOM(res, fn, arg, obj, dcount);
 	    break;
 	}
 	case SMALL_DEF:
@@ -415,8 +454,8 @@ print_term(fmtfn_t fn, void* arg, Eterm obj, long *dcount) {
 	    PRINT_UWORD(res, fn, arg, 'u', 0, 1,
 			(ErlPfUWord) port_channel_no(wobj));
 	    PRINT_CHAR(res, fn, arg, '.');
-	    PRINT_UWORD(res, fn, arg, 'u', 0, 1,
-			(ErlPfUWord) port_number(wobj));
+	    PRINT_UWORD64(res, fn, arg, 'u', 0, 1,
+			  (ErlPfUWord64) port_number(wobj));
 	    PRINT_CHAR(res, fn, arg, '>');
 	    break;
 	case LIST_DEF:

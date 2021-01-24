@@ -396,6 +396,11 @@
 #include "erl_proc_sig_queue.h"
 #undef ERTS_PROC_SIG_QUEUE_TYPE_ONLY
 
+#define ERL_THR_PROGRESS_TSD_TYPE_ONLY
+#include "erl_thr_progress.h"
+#undef ERL_THR_PROGRESS_TSD_TYPE_ONLY
+
+
 #if defined(DEBUG) || 0
 #  define ERTS_ML_DEBUG
 #else
@@ -408,7 +413,18 @@
 #  define ERTS_ML_ASSERT(E) ((void) 1)
 #endif
 
-#define ERTS_MON_TYPE_MAX               ((Uint16) 7)
+#define ERTS_ML_STATE_ALIAS_BITS        2
+#define ERTS_ML_STATE_ALIAS_SHIFT       11
+#define ERTS_ML_STATE_ALIAS_MASK        \
+    ((((Uint16) 1 << ERTS_ML_STATE_ALIAS_BITS) - 1) \
+     << ERTS_ML_STATE_ALIAS_SHIFT)
+
+#define ERTS_ML_STATE_ALIAS_NONE        (((Uint16) 0) << ERTS_ML_STATE_ALIAS_SHIFT)
+#define ERTS_ML_STATE_ALIAS_UNALIAS     (((Uint16) 1) << ERTS_ML_STATE_ALIAS_SHIFT)
+#define ERTS_ML_STATE_ALIAS_DEMONITOR   (((Uint16) 2) << ERTS_ML_STATE_ALIAS_SHIFT)
+#define ERTS_ML_STATE_ALIAS_ONCE        (((Uint16) 3) << ERTS_ML_STATE_ALIAS_SHIFT)
+
+#define ERTS_MON_TYPE_MAX               ((Uint16) 8)
 
 #define ERTS_MON_TYPE_PROC              ((Uint16) 0)
 #define ERTS_MON_TYPE_PORT              ((Uint16) 1)
@@ -417,7 +433,8 @@
 #define ERTS_MON_TYPE_RESOURCE          ((Uint16) 4)
 #define ERTS_MON_TYPE_NODE              ((Uint16) 5)
 #define ERTS_MON_TYPE_NODES             ((Uint16) 6)
-#define ERTS_MON_TYPE_SUSPEND           ERTS_MON_TYPE_MAX
+#define ERTS_MON_TYPE_SUSPEND           ((Uint16) 7)
+#define ERTS_MON_TYPE_ALIAS             ERTS_MON_TYPE_MAX
 
 #define ERTS_MON_LNK_TYPE_MAX           (ERTS_MON_TYPE_MAX + ((Uint16) 3))
 #define ERTS_LNK_TYPE_MAX               ERTS_MON_LNK_TYPE_MAX
@@ -437,6 +454,9 @@
 #define ERTS_ML_FLG_SPAWN_ABANDONED     (((Uint16) 1) << 8)
 #define ERTS_ML_FLG_SPAWN_NO_SMSG       (((Uint16) 1) << 9)
 #define ERTS_ML_FLG_SPAWN_NO_EMSG       (((Uint16) 1) << 10)
+#define ERTS_ML_FLG_ALIAS_BIT1          (((Uint16) 1) << 11)
+#define ERTS_ML_FLG_ALIAS_BIT2          (((Uint16) 1) << 12)
+#define ERTS_ML_FLG_TAG                 (((Uint16) 1) << 13)
 
 #define ERTS_ML_FLG_DBG_VISITED         (((Uint16) 1) << 15)
 
@@ -481,7 +501,7 @@ struct ErtsMonLnkNode__ {
     Uint16 type;
 };
 
-typedef struct {
+typedef struct ErtsMonLnkDist__ {
     Eterm nodename;
     Uint32 connection_id;
     erts_atomic_t refc;
@@ -492,6 +512,7 @@ typedef struct {
     ErtsMonLnkNode *orig_name_monitors; /* Origin named monitors
                                            read-black tree */
     ErtsMonLnkNode *dist_pend_spawn_exit;
+    ErtsThrPrgrLaterOp cleanup_lop;
 } ErtsMonLnkDist;
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *\
@@ -544,7 +565,7 @@ ERTS_GLB_INLINE void erts_ml_dl_list_delete__(ErtsMonLnkNode **list,
                                               ErtsMonLnkNode *ml);
 ERTS_GLB_INLINE ErtsMonLnkNode *erts_ml_dl_list_first__(ErtsMonLnkNode *list);
 ERTS_GLB_INLINE ErtsMonLnkNode *erts_ml_dl_list_last__(ErtsMonLnkNode *list);
-void erts_mon_link_dist_destroy__(ErtsMonLnkDist *mld);
+void erts_schedule_mon_link_dist_destruction__(ErtsMonLnkDist *mld);
 ERTS_GLB_INLINE void *erts_ml_node_to_main_struct__(ErtsMonLnkNode *mln);
 
 /* implementations for globally inlined misc functions... */
@@ -562,7 +583,7 @@ erts_mon_link_dist_dec_refc(ErtsMonLnkDist *mld)
 {
     ERTS_ML_ASSERT(erts_atomic_read_nob(&mld->refc) > 0);
     if (erts_atomic_dec_read_nob(&mld->refc) == 0)
-        erts_mon_link_dist_destroy__(mld);
+        erts_schedule_mon_link_dist_destruction__(mld);
 }
 
 ERTS_GLB_INLINE void *
@@ -641,15 +662,23 @@ typedef int (*ErtsMonitorFunc)(ErtsMonitor *, void *, Sint);
 
 typedef struct {
     ErtsMonitor origin;
-    ErtsMonitor target;
+    union {
+        ErtsMonitor target;
+        Eterm ref_heap[ERTS_MAX_INTERNAL_REF_SIZE];
+    } u;
     Eterm ref;
     erts_atomic32_t refc;
 } ErtsMonitorData;
 
 typedef struct {
     ErtsMonitorData md;
-    ErtsORefThing oref_thing;
+    Eterm ref_heap[ERTS_MAX_INTERNAL_REF_SIZE];
 } ErtsMonitorDataHeap;
+
+typedef struct {
+    ErtsMonitorData md;
+    Eterm heap[1 + ERTS_MAX_INTERNAL_REF_SIZE];
+} ErtsMonitorDataTagHeap;
 
 typedef struct ErtsMonitorDataExtended__ ErtsMonitorDataExtended;
 
@@ -781,11 +810,11 @@ void erts_monitor_tree_insert(ErtsMonitor **root, ErtsMonitor *mon);
  *
  * @param[in]     old           Monitor to remove from the tree
  *
- * @param[in]     new           Monitor to insert into the tree
+ * @param[in]     new_           Monitor to insert into the tree
  *
  */
 void erts_monitor_tree_replace(ErtsMonitor **root, ErtsMonitor *old,
-                               ErtsMonitor *new);
+                               ErtsMonitor *new_);
 
 /**
  *
@@ -1161,11 +1190,15 @@ int erts_monitor_list_foreach_delete_yielding(ErtsMonitor **list,
  *
  * @param[in]     name          An atom (the name) or NIL depending on type
  *
+ * @param[in]     tag           Tag to use in message when monitor is
+ *                              triggered or THE_NON_VALUE if default
+ *                              should be used.
+ *
  * @returns                     A pointer to monitor data structure
  *
  */
 ErtsMonitorData *erts_monitor_create(Uint16 type, Eterm ref, Eterm origin,
-                                     Eterm target, Eterm name);
+                                     Eterm target, Eterm name, Eterm tag);
 
 /**
  *
@@ -1384,21 +1417,24 @@ extern size_t erts_monitor_node_key_offset;
 ERTS_GLB_INLINE ErtsMonitorData *
 erts_monitor_to_data(ErtsMonitor *mon)
 {
-    ErtsMonitorData *mdp = erts_ml_node_to_main_struct__((ErtsMonLnkNode *) mon);
+    ErtsMonitorData *mdp = (ErtsMonitorData *)erts_ml_node_to_main_struct__((ErtsMonLnkNode *) mon);
 
 #ifdef ERTS_ML_DEBUG
     ERTS_ML_ASSERT(!(mdp->origin.flags & ERTS_ML_FLG_TARGET));
     ERTS_ML_ASSERT(erts_monitor_origin_offset == (size_t) mdp->origin.offset);
-    ERTS_ML_ASSERT(!!(mdp->target.flags & ERTS_ML_FLG_TARGET));
-    ERTS_ML_ASSERT(erts_monitor_target_offset == (size_t) mdp->target.offset);
+    ERTS_ML_ASSERT(mon->type == ERTS_MON_TYPE_ALIAS
+                   || !!(mdp->u.target.flags & ERTS_ML_FLG_TARGET));
+    ERTS_ML_ASSERT(mon->type == ERTS_MON_TYPE_ALIAS
+                   || erts_monitor_target_offset == (size_t) mdp->u.target.offset);
     if (mon->type == ERTS_MON_TYPE_NODE || mon->type == ERTS_MON_TYPE_NODES
         || mon->type == ERTS_MON_TYPE_SUSPEND) {
         ERTS_ML_ASSERT(erts_monitor_node_key_offset == (size_t) mdp->origin.key_offset);
-        ERTS_ML_ASSERT(erts_monitor_node_key_offset == (size_t) mdp->target.key_offset);
+        ERTS_ML_ASSERT(erts_monitor_node_key_offset == (size_t) mdp->u.target.key_offset);
     }
     else {
         ERTS_ML_ASSERT(erts_monitor_origin_key_offset == (size_t) mdp->origin.key_offset);
-        ERTS_ML_ASSERT(erts_monitor_target_key_offset == (size_t) mdp->target.key_offset);
+        ERTS_ML_ASSERT(mon->type == ERTS_MON_TYPE_ALIAS
+                       || erts_monitor_target_key_offset == (size_t) mdp->u.target.key_offset);
     }
 #endif
 
@@ -1413,7 +1449,8 @@ erts_monitor_release(ErtsMonitor *mon)
 
     if (erts_atomic32_dec_read_mb(&mdp->refc) == 0) {
         ERTS_ML_ASSERT(!(mdp->origin.flags & ERTS_ML_FLG_IN_TABLE));
-        ERTS_ML_ASSERT(!(mdp->target.flags & ERTS_ML_FLG_IN_TABLE));
+        ERTS_ML_ASSERT(mon->type == ERTS_MON_TYPE_ALIAS
+                       || !(mdp->u.target.flags & ERTS_ML_FLG_IN_TABLE));
 
         erts_monitor_destroy__(mdp);
     }
@@ -1423,12 +1460,12 @@ ERTS_GLB_INLINE void
 erts_monitor_release_both(ErtsMonitorData *mdp)
 {
     ERTS_ML_ASSERT((mdp->origin.flags & ERTS_ML_FLGS_SAME)
-                   == (mdp->target.flags & ERTS_ML_FLGS_SAME));
+                   == (mdp->u.target.flags & ERTS_ML_FLGS_SAME));
     ERTS_ML_ASSERT(erts_atomic32_read_nob(&mdp->refc) >= 2);
 
     if (erts_atomic32_add_read_mb(&mdp->refc, (erts_aint32_t) -2) == 0) {
         ERTS_ML_ASSERT(!(mdp->origin.flags & ERTS_ML_FLG_IN_TABLE));
-        ERTS_ML_ASSERT(!(mdp->target.flags & ERTS_ML_FLG_IN_TABLE));
+        ERTS_ML_ASSERT(!(mdp->u.target.flags & ERTS_ML_FLG_IN_TABLE));
 
         erts_monitor_destroy__(mdp);
     }
@@ -1448,14 +1485,14 @@ erts_monitor_dist_insert(ErtsMonitor *mon, ErtsMonLnkDist *dist)
 
     ERTS_ML_ASSERT(!mdep->dist);
     ERTS_ML_ASSERT(dist);
-    mdep->dist = dist;
-
-    erts_mon_link_dist_inc_refc(dist);
 
     erts_mtx_lock(&dist->mtx);
 
     insert = dist->alive;
     if (insert) {
+        mdep->dist = dist;
+        erts_mon_link_dist_inc_refc(dist);
+
         if ((mon->flags & (ERTS_ML_FLG_NAME
                            | ERTS_ML_FLG_TARGET)) == ERTS_ML_FLG_NAME)
             erts_monitor_tree_insert(&dist->orig_name_monitors, mon);
@@ -1474,7 +1511,7 @@ erts_monitor_dist_delete(ErtsMonitor *mon)
     ErtsMonitorDataExtended *mdep;
     ErtsMonLnkDist *dist;
     Uint16 flags;
-    int delete;
+    int delete_;
 
     ERTS_ML_ASSERT(mon->flags & ERTS_ML_FLG_EXTENDED);
     ERTS_ML_ASSERT(mon->type == ERTS_MON_TYPE_DIST_PROC
@@ -1487,8 +1524,8 @@ erts_monitor_dist_delete(ErtsMonitor *mon)
     erts_mtx_lock(&dist->mtx);
 
     flags = mon->flags;
-    delete = !!dist->alive & !!(flags & ERTS_ML_FLG_IN_TABLE);
-    if (delete) {
+    delete_ = !!dist->alive & !!(flags & ERTS_ML_FLG_IN_TABLE);
+    if (delete_) {
         if ((flags & (ERTS_ML_FLG_NAME
                       | ERTS_ML_FLG_TARGET)) == ERTS_ML_FLG_NAME)
             erts_monitor_tree_delete(&dist->orig_name_monitors, mon);
@@ -1498,7 +1535,7 @@ erts_monitor_dist_delete(ErtsMonitor *mon)
 
     erts_mtx_unlock(&dist->mtx);
 
-    return delete;
+    return delete_;
 }
 
 
@@ -1619,7 +1656,7 @@ ErtsLink *erts_link_tree_lookup_insert(ErtsLink **root, ErtsLink *lnk);
  *
  */
 ErtsLink *erts_link_tree_lookup_create(ErtsLink **root, int *created,
-                                       Uint16 type, Eterm this, Eterm other);
+                                       Uint16 type, Eterm this_, Eterm other);
 
 /**
  *
@@ -1654,7 +1691,7 @@ void erts_link_tree_insert(ErtsLink **root, ErtsLink *lnk);
  * @param[in]     new           Link to insert into the tree
  *
  */
-void erts_link_tree_replace(ErtsLink **root, ErtsLink *old, ErtsLink *new);
+void erts_link_tree_replace(ErtsLink **root, ErtsLink *old, ErtsLink *new_);
 
 /**
  *
@@ -2237,7 +2274,7 @@ extern size_t erts_link_key_offset;
 ERTS_GLB_INLINE ErtsLinkData *
 erts_link_to_data(ErtsLink *lnk)
 {
-    ErtsLinkData *ldp = erts_ml_node_to_main_struct__((ErtsMonLnkNode *) lnk);
+    ErtsLinkData *ldp = (ErtsLinkData *)erts_ml_node_to_main_struct__((ErtsMonLnkNode *) lnk);
 
 #ifdef ERTS_ML_DEBUG
     ERTS_ML_ASSERT(erts_link_a_offset == (size_t) ldp->a.offset);
@@ -2346,15 +2383,15 @@ erts_link_dist_insert(ErtsLink *lnk, ErtsMonLnkDist *dist)
 
     ERTS_ML_ASSERT(!ldep->dist);
     ERTS_ML_ASSERT(dist);
-    ldep->dist = dist;
-
-    erts_mon_link_dist_inc_refc(dist);
 
     erts_mtx_lock(&dist->mtx);
 
     insert = dist->alive;
-    if (insert)
+    if (insert) {
+        ldep->dist = dist;
+        erts_mon_link_dist_inc_refc(dist);
         erts_link_list_insert(&dist->links, lnk);
+    }
 
     erts_mtx_unlock(&dist->mtx);
 
@@ -2366,7 +2403,7 @@ erts_link_dist_delete(ErtsLink *lnk)
 {
     ErtsLinkDataExtended *ldep;
     ErtsMonLnkDist *dist;
-    int delete;
+    int delete_;
 
     ERTS_ML_ASSERT(lnk->flags & ERTS_ML_FLG_EXTENDED);
     ERTS_ML_ASSERT(lnk->type == ERTS_LNK_TYPE_DIST_PROC);
@@ -2378,13 +2415,13 @@ erts_link_dist_delete(ErtsLink *lnk)
 
     erts_mtx_lock(&dist->mtx);
 
-    delete = !!dist->alive & !!(lnk->flags & ERTS_ML_FLG_IN_TABLE);
-    if (delete)
+    delete_ = !!dist->alive & !!(lnk->flags & ERTS_ML_FLG_IN_TABLE);
+    if (delete_)
         erts_link_list_delete(&dist->links, lnk);
 
     erts_mtx_unlock(&dist->mtx);
 
-    return delete;
+    return delete_;
 }
 
 

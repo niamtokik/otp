@@ -475,10 +475,7 @@ t2b_system_limit(Config) when is_list(Config) ->
                                      memsup:get_system_memory_data()) of
                 Memory when is_integer(Memory),
                             Memory > 6*1024*1024*1024 ->
-                    test_t2b_system_limit(term_to_binary, fun erlang:term_to_binary/1, fun erlang:term_to_binary/2),
-                    test_t2b_system_limit(term_to_iovec, fun erlang:term_to_iovec/1, fun erlang:term_to_iovec/2),
-                    garbage_collect(),
-                    ok;
+                    do_t2b_system_limit();
                 _ ->
                     {skipped, "Not enough memory on this machine"}
             end;
@@ -486,36 +483,51 @@ t2b_system_limit(Config) when is_list(Config) ->
             {skipped, "Only interesting on 64-bit builds"}
     end.
 
-test_t2b_system_limit(Name, F1, F2) ->
-    io:format("Creating HugeBin~n", []),
-    Bits = ((1 bsl 32)+1)*8,
-    HugeBin = <<0:Bits>>,
+do_t2b_system_limit() ->
+    F = fun() ->
+                io:format("Creating HugeBin~n", []),
+                Bits = (1 bsl 32) + 1,
+                HugeBin = <<0:Bits/unit:8>>,
+                test_t2b_system_limit(HugeBin, term_to_binary,
+                                      fun erlang:term_to_binary/1,
+                                      fun erlang:term_to_binary/2),
+                test_t2b_system_limit(HugeBin, term_to_iovec,
+                                      fun erlang:term_to_iovec/1,
+                                      fun erlang:term_to_iovec/2),
+                garbage_collect(),
+                ok
+        end,
+    Opts = [{args, "-pa " ++ filename:dirname(code:which(?MODULE))}],
+    {ok,Node} = test_server:start_node(?FUNCTION_NAME, slave, Opts),
+    erpc:call(Node, F).
 
+test_t2b_system_limit(HugeBin, Name, F1, F2) ->
     io:format("Testing ~p(HugeBin)~n", [Name]),
-    {'EXIT',{system_limit,[{erlang,Name,
-                            [HugeBin],
-                            _} |_]}} = (catch F1(HugeBin)),
+    {'EXIT',{system_limit,[{erlang,Name,[HugeBin],_}|_]}} =
+        t2b_eval(fun() -> F1(HugeBin) end),
 
     io:format("Testing ~p(HugeBin, [compressed])~n", [Name]),
-    {'EXIT',{system_limit,[{erlang,Name,
-                            [HugeBin, [compressed]],
-                            _} |_]}} = (catch F2(HugeBin, [compressed])),
+    {'EXIT',{system_limit,[{erlang,Name,[HugeBin,[compressed]],_}|_]}} =
+        t2b_eval(fun() -> F2(HugeBin, [compressed]) end),
 
     %% Check that it works also after we have trapped...
     io:format("Creating HugeListBin~n", []),
-    HugeListBin = [lists:duplicate(2000000,2000000), HugeBin],
+    HugeListBin = [lists:duplicate(2000000, 2000000), HugeBin],
 
     io:format("Testing ~p(HugeListBin)~n", [Name]),
-    {'EXIT',{system_limit,[{erlang,Name,
-                            [HugeListBin],
-                            _} |_]}} = (catch F1(HugeListBin)),
+    {'EXIT',{system_limit,[{erlang,Name,[HugeListBin],_}|_]}} =
+        t2b_eval(fun() -> F1(HugeListBin) end),
 
     io:format("Testing ~p(HugeListBin, [compressed])~n", [Name]),
-    {'EXIT',{system_limit,[{erlang,Name,
-                            [HugeListBin, [compressed]],
-                            _} |_]}} = (catch F2(HugeListBin, [compressed])),
+    {'EXIT',{system_limit,[{erlang,Name,[HugeListBin,[compressed]],_}|_]}} =
+        t2b_eval(fun() -> F2(HugeListBin, [compressed]) end),
 
     ok.
+
+t2b_eval(F) ->
+    Result = (catch F()),
+    io:put_chars(io_lib:format("~P\n", [Result,100])),
+    Result.
 
 term_to_iovec(Config) when is_list(Config) ->
     Bin = list_to_binary(lists:duplicate(1000,100)),
@@ -948,32 +960,7 @@ bad_terms(Config) when is_list(Config) ->
     {'EXIT',{badarg,_}} = (catch binary_to_term(<<131,$M,-1:32,1,11,22,33>>)),
     ok.
 
-
-corrupter(Term) when is_function(Term);
-		     is_function(hd(Term));
-		     is_function(element(2,element(2,element(2,Term)))) ->
-    %% Check if lists is native compiled. If it is, we do not try to
-    %% corrupt funs as this can create some very strange behaviour.
-    %% To show the error print `Byte` in the foreach fun in corrupter/2.
-    case erlang:system_info(hipe_architecture) of
-	undefined ->
-	    corrupter0(Term);
-	Architecture ->
-	    {lists, ListsBinary, _ListsFilename} = code:get_object_code(lists),
-	    ChunkName = hipe_unified_loader:chunk_name(Architecture),
-	    NativeChunk = beam_lib:chunks(ListsBinary, [ChunkName]),
-	    case NativeChunk of
-		{ok,{_,[{_,Bin}]}} when is_binary(Bin) ->
-		    S = io_lib:format("Skipping corruption of: ~P", [Term,12]),
-		    io:put_chars(S);
-		{error, beam_lib, _} ->
-		    corrupter0(Term)
-	    end
-    end;
 corrupter(Term) ->
-    corrupter0(Term).
-
-corrupter0(Term) ->
     try
 	      S = io_lib:format("About to corrupt: ~P", [Term,12]),
 	      io:put_chars(S)

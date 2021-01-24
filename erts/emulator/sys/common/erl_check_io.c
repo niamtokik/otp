@@ -1022,11 +1022,9 @@ done:
 done_unknown:
     erts_mtx_unlock(fd_mtx(fd));
     if (stop_select_fn) {
-	int was_unmasked = erts_block_fpe();
 	DTRACE1(driver_stop_select, name);
 	LTTNG1(driver_stop_select, "unknown");
 	(*stop_select_fn)(e, NULL);
-	erts_unblock_fpe(was_unmasked);
     }
     if (free_select)
 	free_drv_select_data(free_select);
@@ -1658,7 +1656,7 @@ erts_create_pollset_thread(int id, ErtsThrPrgrData *tpd) {
 }
 
 void
-erts_check_io(ErtsPollThread *psi, ErtsMonotonicTime timeout_time)
+erts_check_io(ErtsPollThread *psi, ErtsMonotonicTime timeout_time, int poll_only_thread)
 {
     int pollres_len;
     int poll_ret, i;
@@ -1672,6 +1670,9 @@ erts_check_io(ErtsPollThread *psi, ErtsMonotonicTime timeout_time)
 
     pollres_len = psi->pollres_len;
 
+    if (poll_only_thread)
+        erts_thr_progress_active(psi->tpd, 0);
+
 #if ERTS_POLL_USE_FALLBACK
     if (psi->ps == get_fallback_pollset()) {
 
@@ -1682,6 +1683,9 @@ erts_check_io(ErtsPollThread *psi, ErtsMonotonicTime timeout_time)
     {
         poll_ret = erts_poll_wait(psi->ps, psi->pollres, &pollres_len, psi->tpd, timeout_time);
     }
+
+    if (poll_only_thread)
+        erts_thr_progress_active(psi->tpd, 1);
 
 #ifdef ERTS_ENABLE_LOCK_CHECK
     erts_lc_check_exact(NULL, 0); /* No locks should be locked */
@@ -1761,8 +1765,10 @@ erts_check_io(ErtsPollThread *psi, ErtsMonotonicTime timeout_time)
 
                 reactive_events = state->active_events;
 
-                if (state->flags & ERTS_EV_FLAG_IN_SCHEDULER)
+                if (state->flags & ERTS_EV_FLAG_IN_SCHEDULER) {
                     reactive_events &= ~ERTS_POLL_EV_IN;
+                    state->active_events |= ERTS_POLL_EV_IN;
+                }
 
                 /* Reactivate the poll op if there are still active events */
                 if (reactive_events) {
@@ -1880,11 +1886,9 @@ erts_check_io(ErtsPollThread *psi, ErtsMonotonicTime timeout_time)
 	erts_mtx_unlock(fd_mtx(fd));
 
         if (drv_ptr) {
-            int was_unmasked = erts_block_fpe();
             DTRACE1(driver_stop_select, drv_ptr->name);
             LTTNG1(driver_stop_select, drv_ptr->name);
             (*drv_ptr->stop_select)((ErlDrvEvent) fd, NULL);
-            erts_unblock_fpe(was_unmasked);
             if (drv_ptr->handle) {
 		erts_ddll_dereference_driver(drv_ptr->handle);
 	    }

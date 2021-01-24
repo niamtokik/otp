@@ -22,12 +22,108 @@
 %%----------------------------------------------------------------------
 -module(ssh_test_lib).
 
-%% Note: This directive should only be used in test suites.
--compile(export_all).
+-export([
+connect/2,
+connect/3,
+daemon/1,
+daemon/2,
+daemon/3,
+daemon_port/1,
+daemon_port/2,
+gen_tcp_connect/3,
+open_sshc/3,
+open_sshc/4,
+open_sshc_cmd/3,
+open_sshc_cmd/4,
+std_daemon/2,
+std_daemon1/2,
+std_connect/4,
+std_simple_sftp/3,
+std_simple_sftp/4,
+std_simple_exec/3,
+std_simple_exec/4,
+start_shell/2,
+start_shell/3,
+start_io_server/0,
+init_io_server/1,
+loop_io_server/2,
+io_request/5,
+io_reply/3,
+reply/2,
+rcv_expected/3,
+rcv_lingering/1,
+receive_exec_result/1,
+receive_exec_result_or_fail/1,
+receive_exec_end/2,
+receive_exec_result/3,
+failfun/2,
+hostname/0,
+del_dirs/1,
+del_dir_contents/1,
+do_del_files/2,
+openssh_sanity_check/1,
+default_algorithms/1,
+default_algorithms/3,
+default_algorithms/2,
+run_fake_ssh/1,
+extract_algos/1,
+get_atoms/1,
+intersection/2,
+intersect/2,
+intersect_bi_dir/1,
+some_empty/1,
+sort_spec/1,
+sshc/1,
+ssh_type/0,
+ssh_type1/0,
+installed_ssh_version/1,
+algo_intersection/2,
+to_atoms/1,
+ssh_supports/2,
+has_inet6_address/0,
+open_port/1,
+open_port/2,
+sleep_millisec/1,
+sleep_microsec/1,
+busy_wait/2,
+get_kex_init/1,
+get_kex_init/3,
+expected_state/1,
+random_chars/1,
+create_random_dir/1,
+match_ip/2,
+match_ip0/2,
+match_ip1/2,
+mangle_connect_address/1,
+mangle_connect_address/2,
+loopback/1,
+mangle_connect_address1/2,
+ntoa/1,
+try_enable_fips_mode/0,
+is_cryptolib_fips_capable/0,
+report/2,
+lc_name_in/1,
+ptty_supported/0,
+has_WSL/0,
+winpath_to_linuxpath/1,
+copy_recursive/2,
+mk_dir_path/1,
+setup_all_user_host_keys/1,
+setup_all_user_host_keys/2,
+setup_all_user_host_keys/3,
+setup_all_host_keys/1,
+setup_all_host_keys/2,
+setup_all_user_keys/2,
+setup_user_key/3,
+setup_host_key_create_dir/3,
+setup_host_key/3,
+setup_known_host/3,
+get_addr_str/0,
+file_base_name/2
+        ]).
 
--include_lib("public_key/include/public_key.hrl").
 -include_lib("common_test/include/ct.hrl").
--include_lib("ssh/src/ssh_transport.hrl").
+-include("ssh_transport.hrl").
 -include_lib("kernel/include/file.hrl").
 -include("ssh_test_lib.hrl").
 
@@ -184,11 +280,44 @@ start_shell(Port, IOServer) ->
 start_shell(Port, IOServer, ExtraOptions) ->
     spawn_link(
       fun() ->
-	      Host = hostname(),
+              ct:log("~p:~p:~p ssh_test_lib:start_shell(~p, ~p, ~p)",
+                     [?MODULE,?LINE,self(), Port, IOServer, ExtraOptions]),
 	      Options = [{user_interaction, false},
 			 {silently_accept_hosts,true} | ExtraOptions],
-	      group_leader(IOServer, self()),
-	      ssh:shell(Host, Port, Options)
+              try
+                  group_leader(IOServer, self()),
+                  case Port of
+                      22 ->
+                          Host = hostname(),
+                          ct:log("Port==22 Call ssh:shell(~p, ~p)",
+                                 [Host, Options]),
+                          ssh:shell(Host, Options);
+                      _ when is_integer(Port) ->
+                          Host = hostname(),
+                          ct:log("is_integer(Port) Call ssh:shell(~p, ~p, ~p)",
+                                 [Host, Port, Options]),
+                          ssh:shell(Host, Port, Options);
+                      Socket when is_port(Socket) ->
+                          receive
+                              start -> ok
+                          end,
+                          ct:log("is_port(Socket) Call ssh:shell(~p, ~p)",
+                                 [Socket, Options]),
+                          ssh:shell(Socket, Options);
+                      ConnRef when is_pid(ConnRef) ->
+                          ct:log("is_pid(ConnRef) Call ssh:shell(~p)",
+                                 [ConnRef]),
+                          ssh:shell(ConnRef) % Options were given in ssh:connect
+                  end
+              of
+                  R ->
+                      ct:log("~p:~p ssh_test_lib:start_shell(~p, ~p, ~p) -> ~p",
+                             [?MODULE,?LINE,Port, IOServer, ExtraOptions, R])
+              catch
+                  C:E:S ->
+                      ct:log("Exception ~p:~p~n~p", [C,E,S]),
+                      ct:fail("Exception",[])
+              end
       end).
 
 
@@ -209,6 +338,7 @@ loop_io_server(TestCase, Buff0) ->
              %%ct:log("io_server ~p:~p ~p got ~p",[?MODULE,?LINE,self(),_REQ]),
 	     {ok, Reply, Buff} = io_request(Request, TestCase, From,
 					    ReplyAs, Buff0),
+             %%ct:log("io_server ~p:~p ~p going to reply ~p",[?MODULE,?LINE,self(),Reply]),
 	     io_reply(From, ReplyAs, Reply),
 	     loop_io_server(TestCase, Buff);
 	 {'EXIT',_, _} = _Exit ->
@@ -218,6 +348,12 @@ loop_io_server(TestCase, Buff0) ->
 	30000 -> ct:fail("timeout ~p:~p",[?MODULE,?LINE])
     end.
 
+io_request(getopts,_TestCase, _, _, Buff) ->
+    {ok, [], Buff};
+io_request({get_geometry,columns},_TestCase, _, _, Buff) ->
+    {ok, 80, Buff};
+io_request({get_geometry,rows},_TestCase, _, _, Buff) ->
+    {ok, 24, Buff};
 io_request({put_chars, Chars}, TestCase, _, _, Buff) ->
     reply(TestCase, Chars),
     {ok, ok, Buff};
@@ -225,7 +361,7 @@ io_request({put_chars, unicode, Chars}, TestCase, _, _, Buff) when is_binary(Cha
     reply(TestCase, Chars),
     {ok, ok, Buff};
 io_request({put_chars, unicode, io_lib, format, [Fmt,Args]}, TestCase, _, _, Buff) ->
-    reply(TestCase, io_lib:format(Fmt,Args)),
+    reply(TestCase,  unicode:characters_to_binary(io_lib:format(Fmt,Args))),
     {ok, ok, Buff};
 io_request({put_chars, Enc, Chars}, TestCase, _, _, Buff) ->
     reply(TestCase, unicode:characters_to_binary(Chars,Enc,latin1)),
@@ -240,6 +376,7 @@ io_request({get_line, _Enc, _Prompt} = Request, _, From, ReplyAs, [] = Buff) ->
 
 io_request({get_line, _Enc,_}, _, _, _, [Line | Buff]) ->
     {ok, Line, Buff}.
+
 
 io_reply(_, _, []) ->
     ok;
@@ -728,12 +865,14 @@ get_kex_init(Conn, Ref, TRef) ->
 	    end;
 
 	false ->
-	    ct:log("~p:~p Not in 'connected' state: ~p",[?MODULE,?LINE,State]),
 	    receive
 		{reneg_timeout,Ref} -> 
+                    ct:log("~p:~p Not in 'connected' state: ~p but reneg_timeout received. Fail.",
+                           [?MODULE,?LINE,State]),
 		    ct:log("S = ~p", [S]),
 		    ct:fail(reneg_timeout)
 	    after 0 ->
+                    ct:log("~p:~p Not in 'connected' state: ~p, Will try again after 100ms",[?MODULE,?LINE,State]),
 		    timer:sleep(100), % If renegotiation is complete we do not
 				      % want to exit on the reneg_timeout
 		    get_kex_init(Conn, Ref, TRef)
@@ -988,6 +1127,24 @@ setup_all_host_keys(DataDir, SysDir) ->
                                 OkAlgs
                         end
                 end, [], ssh_transport:supported_algorithms(public_key)).
+
+
+setup_all_user_keys(DataDir, UserDir) ->
+    lists:foldl(fun(Alg, OkAlgs) ->
+                        try
+                            ok = ssh_test_lib:setup_user_key(Alg, DataDir, UserDir)
+                        of
+                            ok -> [Alg|OkAlgs]
+                        catch
+                            error:{badmatch, {error,enoent}} ->
+                                OkAlgs;
+                            C:E:S ->
+                                ct:log("Exception in ~p:~p for alg ~p:  ~p:~p~n~p",
+                                       [?MODULE,?FUNCTION_NAME,Alg,C,E,S]),
+                                OkAlgs
+                        end
+                end, [], ssh_transport:supported_algorithms(public_key)).
+
 
 setup_user_key(SshAlg, DataDir, UserDir) ->
     file:make_dir(UserDir),

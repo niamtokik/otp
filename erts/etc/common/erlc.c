@@ -311,11 +311,6 @@ int main(int argc, char** argv)
         source_file = "<no source>";
 	switch (argv[1][0]) {
 	case '+':
-            if (strcmp(argv[1], "+native") == 0) {
-                /* HiPE makes good use of multiple schedulers, so we'll let it
-                 * use the default number. */
-                single_scheduler = 0;
-            }
 	    PUSH(argv[1]);
 	    break;
 	case '-':

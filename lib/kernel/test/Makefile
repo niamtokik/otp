@@ -40,6 +40,7 @@ SOCKET_MODULES = \
 	socket_SUITE
 
 MODULES= \
+	kernel_test_lib \
 	erpc_SUITE \
 	rpc_SUITE \
 	pdict_SUITE \
@@ -65,7 +66,9 @@ MODULES= \
 	erl_distribution_SUITE \
 	erl_distribution_wb_SUITE \
 	erl_prim_loader_SUITE \
+	erl_uds_dist \
 	error_handler_SUITE \
+	error_info_lib \
 	error_logger_SUITE \
 	error_logger_warn_SUITE \
 	file_SUITE \
@@ -102,7 +105,6 @@ MODULES= \
 	net_SUITE \
 	os_SUITE \
 	pg_SUITE \
-	pg2_SUITE \
 	seq_trace_SUITE \
 	$(SOCKET_MODULES) \
 	wrap_log_reader_SUITE \
@@ -130,6 +132,7 @@ APP_FILES = \
 
 ERL_FILES= $(MODULES:%=%.erl) code_a_test.erl
 HRL_FILES= \
+	kernel_test_lib.hrl \
 	socket_test_evaluator.hrl \
 	socket_test_ttest.hrl \
 	socket_test_ttest_client.hrl
@@ -163,6 +166,9 @@ SOCKET_TARGETS = $(SOCKET_MODULES:%=$(EBIN)/%.$(EMULATOR))
 # ----------------------------------------------------
 
 gen_tcp_dist.erl: ../examples/gen_tcp_dist/src/gen_tcp_dist.erl
+	cp $< $@
+
+erl_uds_dist.erl: ../examples/erl_uds_dist/src/erl_uds_dist.erl
 	cp $< $@
 
 make_emakefile: $(ERL_FILES)

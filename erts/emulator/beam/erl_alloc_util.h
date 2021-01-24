@@ -53,6 +53,7 @@ typedef struct {
     int tpref;
     int ramv;
     int atags;
+    int cp;
     UWord sbct;
     UWord asbcst;
     UWord rsbcst;
@@ -111,6 +112,7 @@ typedef struct {
     0,			/* (bool)   tpref:  thread preferred             */\
     0,			/* (bool)   ramv:   realloc always moves         */\
     0,			/* (bool)   atags:  tagged allocations           */\
+    -1,		        /* (ix)     cp:     carrier pool                 */\
     512*1024,		/* (bytes)  sbct:   sbc threshold                */\
     2*1024*2024,	/* (amount) asbcst: abs sbc shrink threshold     */\
     20,			/* (%)      rsbcst: rel sbc shrink threshold     */\
@@ -149,10 +151,12 @@ typedef struct {
     0,			/* (bool)   tpref:  thread preferred             */\
     0,			/* (bool)   ramv:   realloc always moves         */\
     0,			/* (bool)   atags:  tagged allocations           */\
+    -1,		        /* (ix)     cp:     carrier pool                 */\
     64*1024,		/* (bytes)  sbct:   sbc threshold                */\
     2*1024*2024,	/* (amount) asbcst: abs sbc shrink threshold     */\
     20,			/* (%)      rsbcst: rel sbc shrink threshold     */\
     80,			/* (%)      rsbcmt: rel sbc move threshold       */\
+    50,			/* (%)      rmbcmt: rel mbc move threshold       */\
     128*1024,		/* (bytes)  mmbcs:  main multiblock carrier size */\
     256,		/* (amount) mmsbc:  max mseg sbcs                */\
     ~((UWord) 0),	/* (amount) mmmbc:  max mseg mbcs                */ \
@@ -211,12 +215,6 @@ void  erts_alcu_literal_32_mseg_dealloc(Allctr_t*, void *seg, Uint size, Uint fl
 void* erts_alcu_mmapper_mseg_alloc(Allctr_t*, Uint *size_p, Uint flags);
 void* erts_alcu_mmapper_mseg_realloc(Allctr_t*, void *seg, Uint old_size, Uint *new_size_p);
 void  erts_alcu_mmapper_mseg_dealloc(Allctr_t*, void *seg, Uint size, Uint flags);
-# endif
-
-# if defined(ERTS_ALC_A_EXEC)
-void* erts_alcu_exec_mseg_alloc(Allctr_t*, Uint *size_p, Uint flags);
-void* erts_alcu_exec_mseg_realloc(Allctr_t*, void *seg, Uint old_size, Uint *new_size_p);
-void  erts_alcu_exec_mseg_dealloc(Allctr_t*, void *seg, Uint size, Uint flags);
 # endif
 #endif /* HAVE_ERTS_MSEG */
 
@@ -442,6 +440,24 @@ struct AOFF_RBTree_t_ {
         Sint64 birth_time;     /* for age first fit */
     } u;
 };
+
+#if ERTS_ALC_A_INVALID != 0
+#  error "Carrier pool implementation assumes ERTS_ALC_A_INVALID == 0"
+#endif
+#if ERTS_ALC_A_MIN <= ERTS_ALC_A_INVALID
+#  error "Carrier pool implementation assumes ERTS_ALC_A_MIN > ERTS_ALC_A_INVALID"
+#endif
+
+/* The pools are only allowed to be manipulated by managed threads except in
+ * the alloc_SUITE:cpool test, where only ERTS_ALC_TEST_CPOOL_IX pool is used. */
+
+#define ERTS_ALC_TEST_CPOOL_IX ERTS_ALC_A_INVALID
+/*
+ * System is not an alloc_util allocator, so we use its slot for
+ * the common cpool...
+ */
+#define ERTS_ALC_COMMON_CPOOL_IX ERTS_ALC_A_SYSTEM
+#define ERTS_ALC_NO_CPOOLS (ERTS_ALC_A_MAX+1)
 
 void aoff_add_pooled_mbc(Allctr_t*, Carrier_t*);
 void aoff_remove_pooled_mbc(Allctr_t*, Carrier_t*);
@@ -680,6 +696,7 @@ struct Allctr_t_ {
 	UWord		util_limit;       /* acul */
         UWord           in_pool_limit;    /* acnl */
         UWord           fblk_min_limit;   /* acmfl */
+        int             carrier_pool;     /* cp */
 	struct {
 	    erts_atomic_t	blocks_size[ERTS_ALC_A_COUNT];
 	    erts_atomic_t	no_blocks[ERTS_ALC_A_COUNT];

@@ -70,14 +70,17 @@
          hash_size/1, 
          effective_key_bits/1,
          key_material/1, 
-         signature_algorithm_to_scheme/1]).
+         signature_algorithm_to_scheme/1,
+         bulk_cipher_algorithm/1]).
 
 %% RFC 8446 TLS 1.3
 -export([generate_client_shares/1,
          generate_server_share/1,
          add_zero_padding/2,
          encrypt_ticket/3,
-         decrypt_ticket/3]).
+         decrypt_ticket/3,
+         encrypt_data/4,
+         decrypt_data/4]).
 
 -compile(inline).
 
@@ -155,10 +158,10 @@ nonce_seed(Seed, CipherState) ->
 -spec cipher(cipher_enum(), #cipher_state{}, binary(), iodata(), ssl_record:ssl_version()) ->
 		    {binary(), #cipher_state{}}. 
 %%
-%% Description: Encrypts the data and the MAC using chipher described
+%% Description: Encrypts the data and the MAC using cipher described
 %% by cipher_enum() and updating the cipher state
 %% Used for "MAC then Cipher" suites where first an HMAC of the
-%% data is calculated and the data plus the HMAC is ecncrypted.
+%% data is calculated and the data plus the HMAC is encrypted.
 %%-------------------------------------------------------------------
 cipher(?NULL, CipherState, <<>>, Fragment, _Version) ->
     {iolist_to_binary(Fragment), CipherState};
@@ -528,13 +531,15 @@ rsa_suites(0) ->
      ?TLS_RSA_WITH_AES_128_CBC_SHA,
      ?TLS_RSA_WITH_3DES_EDE_CBC_SHA
     ];  
-rsa_suites(N) when N =< 4 ->
+rsa_suites(N) when N >= 3 ->
     [
      ?TLS_RSA_WITH_AES_256_GCM_SHA384,
      ?TLS_RSA_WITH_AES_256_CBC_SHA256,
      ?TLS_RSA_WITH_AES_128_GCM_SHA256,
      ?TLS_RSA_WITH_AES_128_CBC_SHA256
-    ].
+    ];
+rsa_suites(_) ->
+    [].
 
 %%--------------------------------------------------------------------
 -spec filter(undefined | binary(), [ssl_cipher_format:cipher_suite()], 
@@ -1458,7 +1463,7 @@ decrypt_ticket(CipherFragment, Shard, IV) ->
 
 
 encrypt_ticket_data(Plaintext, Shard, IV) ->
-    AAD = additional_data(erlang:iolist_size(Plaintext) + 16), %% TagLen = 16
+    AAD = additional_data(<<"ticket">>, erlang:iolist_size(Plaintext) + 16), %% TagLen = 16
     {OTP, Key} = make_otp_key(Shard),
     {Content, CipherTag} = crypto:crypto_one_time_aead(aes_256_gcm, Key, IV, Plaintext, AAD, 16, true),
     <<Content/binary,CipherTag/binary,OTP/binary>>.
@@ -1466,16 +1471,34 @@ encrypt_ticket_data(Plaintext, Shard, IV) ->
 
 decrypt_ticket_data(CipherFragment, Shard, IV) ->
     Size = byte_size(Shard),
-    AAD = additional_data(erlang:iolist_size(CipherFragment) - Size),
+    AAD = additional_data(<<"ticket">>, erlang:iolist_size(CipherFragment) - Size),
+    Len = byte_size(CipherFragment) - Size - 16,
+    case CipherFragment of
+        <<Encrypted:Len/binary,CipherTag:16/binary,OTP:Size/binary>> ->
+            Key = crypto:exor(OTP, Shard),
+            crypto:crypto_one_time_aead(aes_256_gcm, Key, IV,
+                                        Encrypted, AAD, CipherTag,
+                                        false);
+        _ ->
+            error
+    end.
+
+encrypt_data(ADTag, Plaintext, Shard, IV) ->
+    AAD = additional_data(ADTag, erlang:iolist_size(Plaintext) + 16), %% TagLen = 16
+    {OTP, Key} = make_otp_key(Shard),
+    {Content, CipherTag} = crypto:crypto_one_time_aead(aes_256_gcm, Key, IV, Plaintext, AAD, 16, true),
+    <<Content/binary,CipherTag/binary,OTP/binary>>.
+
+decrypt_data(ADTag, CipherFragment, Shard, IV) ->
+    Size = byte_size(Shard),
+    AAD = additional_data(ADTag, erlang:iolist_size(CipherFragment) - Size),
     Len = byte_size(CipherFragment) - Size - 16,
     <<Encrypted:Len/binary,CipherTag:16/binary,OTP:Size/binary>> = CipherFragment,
     Key = crypto:exor(OTP, Shard),
     crypto:crypto_one_time_aead(aes_256_gcm, Key, IV, Encrypted, AAD, CipherTag, false).
 
-
-additional_data(Length) ->
-    <<"ticket",?UINT16(Length)>>.
-
+additional_data(Tag, Length) ->
+    <<Tag/binary,?UINT16(Length)>>.
 
 make_otp_key(Shard) ->
     Size = byte_size(Shard),

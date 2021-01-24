@@ -32,6 +32,7 @@ int ei_get_type(const char *buf, const int *index, int *type, int *len)
   const char *s = buf + *index;
 
   *type = get8(s);
+  *len = 0;
   
   switch (*type) {
   case ERL_SMALL_ATOM_EXT:
@@ -60,7 +61,7 @@ int ei_get_type(const char *buf, const int *index, int *type, int *len)
   case ERL_BIT_BINARY_EXT:
     *len = get32be(s);
     break;
-    
+
   case ERL_SMALL_BIG_EXT:
     *len = get8(s); /* #digit_bytes */
     break;
@@ -72,15 +73,13 @@ int ei_get_type(const char *buf, const int *index, int *type, int *len)
   case ERL_NEW_PID_EXT:
       *type = ERL_PID_EXT;
       break;
+  case ERL_V4_PORT_EXT:
   case ERL_NEW_PORT_EXT:
       *type = ERL_PORT_EXT;
       break;
   case ERL_NEWER_REFERENCE_EXT:
       *type = ERL_NEW_REFERENCE_EXT;
       break;
-  default:
-    *len = 0;
-    break;
   }
 
   /* leave index unchanged */

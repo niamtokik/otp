@@ -70,7 +70,8 @@
          otp_14285/1, otp_14378/1,
          external_funs/1,otp_15456/1,otp_15563/1,
          unused_type/1,removed/1, otp_16516/1,
-         inline_nifs/1]).
+         inline_nifs/1,
+         warn_missing_spec/1]).
 
 suite() ->
     [{ct_hooks,[ts_install_cth]},
@@ -93,7 +94,7 @@ all() ->
      record_errors, otp_11879_cont, non_latin1_module, otp_14323,
      stacktrace_syntax, otp_14285, otp_14378, external_funs,
      otp_15456, otp_15563, unused_type, removed, otp_16516,
-     inline_nifs].
+     inline_nifs, warn_missing_spec].
 
 groups() -> 
     [{unused_vars_warn, [],
@@ -1216,7 +1217,6 @@ unsafe_vars_try(Config) when is_list(Config) ->
 	   [],
 	   {errors,[{5,erl_lint,{unsafe_var,'R',{'try',3}}},
 		    {7,erl_lint,{unsafe_var,'Rc',{'try',3}}},
-		    {11,erl_lint,{unsafe_var,'R',{'try',10}}},
 		    {13,erl_lint,{unbound_var,'RR'}},
 		    {13,erl_lint,{unbound_var,'Ro'}},
 		    {13,erl_lint,{unsafe_var,'R',{'try',10}}},
@@ -1225,7 +1225,6 @@ unsafe_vars_try(Config) when is_list(Config) ->
 		    {15,erl_lint,{unsafe_var,'R',{'try',10}}},
 		    {15,erl_lint,{unsafe_var,'RR',{'try',10}}},
 		    {15,erl_lint,{unsafe_var,'Ro',{'try',10}}},
-		    {19,erl_lint,{unsafe_var,'R',{'try',18}}},
 		    {21,erl_lint,{unbound_var,'RR'}},
 		    {21,erl_lint,{unsafe_var,'R',{'try',18}}},
 		    {23,erl_lint,{unsafe_var,'Class',{'try',18}}},
@@ -1251,8 +1250,7 @@ unsafe_vars_try(Config) when is_list(Config) ->
                 {X,Try,R,RR,Ro,Rc,Ra,Class,Data}.
            ">>,
 	   [],
-	   {errors,[{4,erl_lint,{unsafe_var,'R',{'try',3}}},
-		    {6,erl_lint,{unbound_var,'RR'}},
+	   {errors,[{6,erl_lint,{unbound_var,'RR'}},
 		    {6,erl_lint,{unbound_var,'Ro'}},
 		    {6,erl_lint,{unsafe_var,'R',{'try',3}}},
 		    {8,erl_lint,{unsafe_var,'Class',{'try',3}}},
@@ -4226,6 +4224,14 @@ stacktrace_syntax(Config) ->
            ">>,
            [],
            {errors,[{4,erl_lint,{stacktrace_bound,'Stk'}}],[]}},
+          {bound_in_pattern,
+           <<"t1() ->
+                  try error(foo)
+                  catch _:{x,T}:T -> ok
+                  end.
+           ">>,
+           [],
+           {errors,[{3,erl_lint,{stacktrace_bound,'T'}}],[]}},
           {guard_and_bound,
            <<"t1() ->
                   Stk = [],
@@ -4450,6 +4456,26 @@ inline_nifs(Config) ->
            [],
            {warnings,[{2,erl_lint,nif_inline}]}}],
     [] = run(Config, Ts).
+
+warn_missing_spec(Config) ->
+    Test = <<"-export([external_with_spec/0, external_no_spec/0]).
+
+              -spec external_with_spec() -> ok.
+              external_with_spec() -> ok.
+
+              external_no_spec() -> ok.
+
+              -spec internal_with_spec() -> ok.
+              internal_with_spec() -> ok.
+
+              internal_no_spec() -> ok.">>,
+    run(Config, [
+        {warn_missing_spec, Test, [warn_missing_spec],
+            {warnings, [{6, erl_lint, {missing_spec, {external_no_spec, 0}}}]}},
+        {warn_missing_spec_all, Test, [warn_missing_spec_all],
+            {warnings, [{6, erl_lint, {missing_spec, {external_no_spec, 0}}},
+                        {11, erl_lint, {missing_spec, {internal_no_spec, 0}}}]}}
+    ]).
 
 format_error(E) ->
     lists:flatten(erl_lint:format_error(E)).

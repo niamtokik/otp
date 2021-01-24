@@ -21,10 +21,197 @@
 %%
 -module(ssl_packet_SUITE).
 
-%% Note: This directive should only be used in test suites.
--compile(export_all).
+-behaviour(ct_suite).
 
 -include_lib("common_test/include/ct.hrl").
+
+%% Callback functions
+-export([all/0,
+         groups/0,
+         init_per_suite/1,
+         end_per_suite/1,
+         init_per_group/2,
+         end_per_group/2,
+         init_per_testcase/2,
+         end_per_testcase/2]).
+
+%% Testcases
+-export([packet_raw_passive_many_small/0,
+         packet_raw_passive_many_small/1,
+         packet_0_passive_many_small/0,
+         packet_0_passive_many_small/1,
+         packet_1_passive_many_small/0,
+         packet_1_passive_many_small/1,
+         packet_2_passive_many_small/0,
+         packet_2_passive_many_small/1,
+         packet_4_passive_many_small/0,
+         packet_4_passive_many_small/1,
+         packet_raw_passive_some_big/0,
+         packet_raw_passive_some_big/1,
+         packet_0_passive_some_big/0,
+         packet_0_passive_some_big/1,
+         packet_1_passive_some_big/0,
+         packet_1_passive_some_big/1,
+         packet_2_passive_some_big/0,
+         packet_2_passive_some_big/1,
+         packet_4_passive_some_big/0,
+         packet_4_passive_some_big/1,
+         packet_wait_passive/0,
+         packet_wait_passive/1,
+         packet_size_passive/0,
+         packet_size_passive/1,
+         header_decode_one_byte_passive/0,
+         header_decode_one_byte_passive/1,
+         header_decode_two_bytes_passive/0,
+         header_decode_two_bytes_passive/1,
+         header_decode_two_bytes_two_sent_passive/0,
+         header_decode_two_bytes_two_sent_passive/1,
+         header_decode_two_bytes_one_sent_passive/0,
+         header_decode_two_bytes_one_sent_passive/1,
+         packet_httph_passive/0,
+         packet_httph_passive/1,
+         packet_httph_bin_passive/0,
+         packet_httph_bin_passive/1,
+         packet_http_error_passive/0,
+         packet_http_error_passive/1,
+         packet_baddata_passive/0,
+         packet_baddata_passive/1,
+         packet_raw_active_once_many_small/0,
+         packet_raw_active_once_many_small/1,
+         packet_0_active_once_many_small/0,
+         packet_0_active_once_many_small/1,
+         packet_1_active_once_many_small/0,
+         packet_1_active_once_many_small/1,
+         packet_2_active_once_many_small/0,
+         packet_2_active_once_many_small/1,
+         packet_4_active_once_many_small/0,
+         packet_4_active_once_many_small/1,
+         packet_raw_active_once_some_big/0,
+         packet_raw_active_once_some_big/1,
+         packet_0_active_once_some_big/0,
+         packet_0_active_once_some_big/1,
+         packet_1_active_once_some_big/0,
+         packet_1_active_once_some_big/1,
+         packet_2_active_once_some_big/0,
+         packet_2_active_once_some_big/1,
+         packet_4_active_once_some_big/0,
+         packet_4_active_once_some_big/1,
+         packet_httph_active_once/0,
+         packet_httph_active_once/1,
+         packet_httph_bin_active_once/0,
+         packet_httph_bin_active_once/1,
+         packet_raw_active_many_small/0,
+         packet_raw_active_many_small/1,
+         packet_0_active_many_small/0,
+         packet_0_active_many_small/1,
+         packet_1_active_many_small/0,
+         packet_1_active_many_small/1,
+         packet_2_active_many_small/0,
+         packet_2_active_many_small/1,
+         packet_4_active_many_small/0,
+         packet_4_active_many_small/1,
+         packet_raw_active_some_big/0,
+         packet_raw_active_some_big/1,
+         packet_0_active_some_big/0,
+         packet_0_active_some_big/1,
+         packet_1_active_some_big/0,
+         packet_1_active_some_big/1,
+         packet_2_active_some_big/0,
+         packet_2_active_some_big/1,
+         packet_4_active_some_big/0,
+         packet_4_active_some_big/1,
+         packet_wait_active/0,
+         packet_wait_active/1,
+         packet_size_active/0,
+         packet_size_active/1,
+         packet_switch/0,
+         packet_switch/1,
+         header_decode_one_byte_active/0,
+         header_decode_one_byte_active/1,
+         header_decode_two_bytes_active/0,
+         header_decode_two_bytes_active/1,
+         header_decode_two_bytes_two_sent_active/0,
+         header_decode_two_bytes_two_sent_active/1,
+         header_decode_two_bytes_one_sent_active/0,
+         header_decode_two_bytes_one_sent_active/1,
+         packet_httph_active/0,
+         packet_httph_active/1,
+         packet_httph_bin_active/0,
+         packet_httph_bin_active/1,
+         packet_baddata_active/0,
+         packet_baddata_active/1,
+         packet_cdr_decode/0,
+         packet_cdr_decode/1,
+         packet_cdr_decode_list/0,
+	 packet_cdr_decode_list/1,
+         packet_http_decode/0,
+         packet_http_decode/1,
+         packet_http_decode_list/0,
+         packet_http_decode_list/1,
+         packet_http_bin_decode_multi/0,
+         packet_http_bin_decode_multi/1,
+         packet_line_decode/0,
+         packet_line_decode/1,
+         packet_line_decode_list/0,
+         packet_line_decode_list/1,
+         packet_asn1_decode/0,
+         packet_asn1_decode/1,
+         packet_asn1_decode_list/0,
+	 packet_asn1_decode_list/1,
+         packet_sunrm_decode/0,
+         packet_sunrm_decode/1,
+         packet_sunrm_decode_list/0,
+         packet_sunrm_decode_list/1,
+         packet_send_to_large/0,
+         packet_send_to_large/1,
+         packet_tpkt_decode/0,
+         packet_tpkt_decode/1,
+         packet_tpkt_decode_list/0,
+         packet_tpkt_decode_list/1,
+         reject_packet_opt/0,
+         reject_packet_opt/1
+        ]).
+
+%% Apply export
+-export([send_raw/3,
+         passive_raw/3,
+         passive_recv_packet/3,
+         send/3,
+         send_incomplete/3,
+         active_once_raw/4,
+         active_once_packet/3,
+         active_raw/3,
+         active_once_raw/3,
+         active_packet/3,
+         assert_packet_opt/2,
+         server_packet_decode/2,
+         client_packet_decode/2,
+         server_header_decode_active/3,
+         client_header_decode_active/3,
+         server_header_decode_passive/3,
+         client_header_decode_passive/3,
+         server_line_packet_decode/2,
+         server_line_packet_decode/4,
+         client_line_packet_decode/2,
+         client_line_packet_decode/5,
+         server_http_decode/2,
+         client_http_decode/2,
+         server_http_bin_decode/3,
+         client_http_bin_decode/3,
+         client_http_decode_list/2,
+         server_http_decode_error/2,
+         server_send_trailer/2,
+         client_http_decode_trailer_active/1,
+         client_http_decode_trailer_bin_active/1,
+         client_http_decode_trailer_active_once/1,
+         client_http_decode_trailer_bin_active_once/1,
+         client_http_decode_trailer_passive/1,
+         client_http_decode_trailer_bin_passive/1,
+         add_tpkt_header/1,
+         client_reject_packet_opt/2,
+         send_switch_packet/3,
+         recv_switch_packet/3
+         ]).
 
 -define(BYTE(X),     X:8/unsigned-big-integer).
 -define(UINT16(X),   X:16/unsigned-big-integer).
@@ -574,8 +761,8 @@ packet_baddata_active(Config) when is_list(Config) ->
 						   {packet, cdr} |
 						   ClientOpts]}]),
     receive
-	{Client, {other, {ssl_error, _Socket, 
-			  {invalid_packet, _}},{error,closed},1}} -> ok;
+	{Client, {ssl_error, _, {invalid_packet, _}}} ->
+            ok;
 	Unexpected ->
 	    ct:fail({unexpected, Unexpected})
     end,    
@@ -609,7 +796,8 @@ packet_baddata_passive(Config) when is_list(Config) ->
 						   ClientOpts]}]),
 
     receive
-	{Client, {other, {error, {invalid_packet, _}},{error,closed}, 1}} -> ok;
+	{Client, {error, {invalid_packet, _}}} ->
+            ok;
 	Unexpected ->
 	    ct:fail({unexpected, Unexpected})
     end,    
@@ -642,11 +830,11 @@ packet_size_active(Config) when is_list(Config) ->
 						   {packet, 4}, {packet_size, 10} |
 						   ClientOpts]}]),
     receive
-	{Client, {other, {ssl_error, _Socket, 
-			  {invalid_packet, _}},{error,closed},1}} -> ok;
+	{Client, {ssl_error, _, {invalid_packet, _}}}->
+            ok;
 	Unexpected ->
 	    ct:fail({unexpected, Unexpected})
-    end,    
+    end, 
 
     ssl_test_lib:close(Server),
     ssl_test_lib:close(Client).
@@ -677,7 +865,8 @@ packet_size_passive(Config) when is_list(Config) ->
 						   {packet, 4}, {packet_size, 30} |
 						   ClientOpts]}]),
     receive
-	{Client, {other, {error, {invalid_packet, _}},{error,closed},1}} -> ok;
+	{Client, {error, {invalid_packet, _}}} ->
+            ok;
 	Unexpected ->
 	    ct:fail({unexpected, Unexpected})
     end,
@@ -2035,8 +2224,8 @@ passive_recv_packet(Socket, Data, N) ->
     case ssl:recv(Socket, 0, 10000) of
 	{ok, Data} -> 
 	    passive_recv_packet(Socket, Data, N-1);
-	Other ->
-	    {other, Other, ssl:connection_information(Socket, [session_id, cipher_suite]), N}
+        {error, _} = Other ->
+            Other
     end.
 
 send(Socket,_, 0) ->
@@ -2117,9 +2306,9 @@ active_packet(Socket, _, 0) ->
 active_packet(Socket, Data, N) ->
     receive 
 	{ssl, Socket, Data} ->
-	    active_packet(Socket, Data, N -1);
+	    active_packet(Socket, Data, N-1);
 	Other ->
-	    {other, Other, ssl:connection_information(Socket,  [session_id, cipher_suite]),N}
+	    Other
     end.
 
 assert_packet_opt(Socket, Type) ->

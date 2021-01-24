@@ -205,7 +205,13 @@ static void
 erts_cleanup_message(ErtsMessage *mp)
 {
     ErlHeapFragment *bp;
-    if (ERTS_SIG_IS_EXTERNAL_MSG(mp) || ERTS_SIG_IS_NON_MSG(mp)) {
+
+    if (ERTS_SIG_IS_NON_MSG(mp)) {
+        erts_proc_sig_cleanup_non_msg_signal(mp);
+        return;
+    }
+
+    if (ERTS_SIG_IS_EXTERNAL_MSG(mp)) {
         ErtsDistExternal *edep = erts_proc_sig_get_external(mp);
         if (edep) {
             erts_free_dist_ext_copy(edep);
@@ -216,18 +222,12 @@ erts_cleanup_message(ErtsMessage *mp)
         }
     }
 
-    if (ERTS_SIG_IS_MSG(mp) && mp->data.attached != ERTS_MSG_COMBINED_HFRAG) {
+    if (mp->data.attached != ERTS_MSG_COMBINED_HFRAG)
         bp = mp->data.heap_frag;
-    } else {
-        /* All non msg signals are combined HFRAG messages,
-           but we overwrite the mp->data field with the
-           nm_signal queue ptr so have to fix that here
-           before freeing it. */
-        mp->data.attached = ERTS_MSG_COMBINED_HFRAG;
+    else {
         bp = mp->hfrag.next;
         erts_cleanup_offheap(&mp->hfrag.off_heap);
     }
-
     if (bp)
         free_message_buffer(bp);
 }
@@ -1622,6 +1622,15 @@ void erts_factory_undo(ErtsHeapFactory* factory)
                     ERTS_HEAP_FREE(ERTS_ALC_T_HEAP_FRAG, factory->heap_frags_saved,
                                    ERTS_HEAP_FRAG_SIZE(factory->heap_frags_saved->alloc_size));
                 }
+            }
+            if (factory->message) {
+                ASSERT(factory->message->data.attached != ERTS_MSG_COMBINED_HFRAG);
+                ASSERT(!factory->message->data.heap_frag);
+
+                /* Set the message to NIL in order for it not to be treated as
+                   a distributed message by erts_cleanup_messages */
+                factory->message->m[0] = NIL;
+                erts_cleanup_messages(factory->message);
             }
         }
         break;

@@ -390,10 +390,9 @@ bif ets:match_spec_run_r/3
 # Bifs in os module.
 #
 
-bif os:get_env_var/1
-bif os:set_env_var/2
-bif os:unset_env_var/1
-bif os:list_env_vars/0
+bif os:getenv/1
+bif os:putenv/2
+bif os:unsetenv/1
 bif os:getpid/0
 bif os:timestamp/0
 bif os:system_time/0
@@ -458,14 +457,6 @@ bif erts_debug:lcnt_control/1
 bif erts_debug:lcnt_collect/0
 bif erts_debug:lcnt_clear/0
 
-#
-# New Bifs in R8.
-#
-
-bif code:get_chunk/2
-bif code:module_md5/1
-bif code:make_stub_module/3
-bif code:is_module_native/1
 
 #
 # New Bifs in R9C.
@@ -613,7 +604,6 @@ bif erlang:dt_append_vm_tag_data/1
 #
 # New in R16B.
 #
-bif erlang:prepare_loading/2
 bif erlang:finish_loading/1
 bif erlang:insert_element/3
 bif erlang:delete_element/2
@@ -769,3 +759,17 @@ bif erts_internal:abort_pending_connection/2
 #
 
 bif erts_internal:get_creation/0
+
+#
+# New in 24
+#
+
+bif erts_internal:prepare_loading/2
+bif erts_internal:beamfile_chunk/2
+bif erts_internal:beamfile_module_md5/1
+bif os:env/0
+bif erlang:alias/1
+bif erlang:unalias/1
+bif erlang:monitor/3
+bif erlang:error/3
+bif maps:from_keys/2

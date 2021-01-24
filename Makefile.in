@@ -163,13 +163,6 @@ MAKE		= @MAKE_PROG@
 
 PERL		= @PERL@
 
-NATIVE_LIBS_ENABLED = @NATIVE_LIBS_ENABLED@
-
-ifeq ($(NATIVE_LIBS_ENABLED),yes)
-HIPE_BOOTSTRAP_EBIN = boot_ebin
-else
-HIPE_BOOTSTRAP_EBIN = ebin
-endif
 
 # This should be set to the target "arch-vendor-os"
 TARGET	:= @TARGET@
@@ -494,16 +487,17 @@ libs:
 ifeq ($(OTP_SMALL_BUILD),true)
 	$(make_verbose)cd lib && \
 	  ERL_TOP=$(ERL_TOP) PATH=$(BOOT_PREFIX)"$${PATH}" \
-		$(MAKE) $(TYPE)
+		$(MAKE) $(TYPE) ERL_COMPILE_WARNINGS_AS_ERRORS=yes
+
 else
 ifeq ($(OTP_TINY_BUILD),true)
 	$(make_verbose)cd lib && \
 	  ERL_TOP=$(ERL_TOP) PATH=$(BOOT_PREFIX)"$${PATH}" \
-		$(MAKE) opt TINY_BUILD=true
+		$(MAKE) opt TINY_BUILD=true ERL_COMPILE_WARNINGS_AS_ERRORS=yes
 else
 	$(make_verbose)cd lib && \
 	  ERL_TOP=$(ERL_TOP) PATH=$(BOOT_PREFIX)"$${PATH}" \
-		$(MAKE) $(TYPE) BUILD_ALL=true
+		$(MAKE) $(TYPE) BUILD_ALL=true ERL_COMPILE_WARNINGS_AS_ERRORS=yes
 	$(V_at)test -f $(ERL_TOP)/make/otp_built || echo "OTP built" > $(ERL_TOP)/make/otp_built
 endif
 endif
@@ -527,6 +521,15 @@ preloaded:
 	$(make_verbose)cd erts/preloaded/src && \
 	ERL_TOP=$(ERL_TOP) PATH=$(BOOT_PREFIX)"$${PATH}" \
 		$(MAKE) opt BUILD_ALL=true	
+
+compdb:
+	(cd erts/emulator && ERL_TOP=$(ERL_TOP) TYPE=$(TYPE) $(MAKE) compdb)
+	sed -i -e '1s/^/[\n/' -e '$$s/,$$/\n]/' $(ERL_TOP)/compile_commands.json
+
+format-check:
+	(cd erts/emulator && ERL_TOP=$(ERL_TOP) $(MAKE) format-check)
+format:
+	(cd erts/emulator && ERL_TOP=$(ERL_TOP) $(MAKE) format)
 
 dep depend:
 	$(make_verbose)
@@ -600,12 +603,12 @@ bootstrap_setup_target:
 tiny_secondary_bootstrap_build:
 	$(make_verbose)cd lib && \
 	  ERL_TOP=$(ERL_TOP) PATH=$(BOOT_PREFIX)"$${PATH}" \
-		$(MAKE) opt SECONDARY_BOOTSTRAP=true TINY_BUILD=true
+		$(MAKE) opt SECONDARY_BOOTSTRAP=true TINY_BUILD=true ERL_COMPILE_WARNINGS_AS_ERRORS=yes
 
 secondary_bootstrap_build:
 	$(make_verbose)cd lib && \
 	  ERL_TOP=$(ERL_TOP) PATH=$(BOOT_PREFIX)"$${PATH}" \
-		$(MAKE) opt SECONDARY_BOOTSTRAP=true
+		$(MAKE) opt SECONDARY_BOOTSTRAP=true ERL_COMPILE_WARNINGS_AS_ERRORS=yes
 
 tiny_secondary_bootstrap_copy:
 	$(V_at)if test ! -d $(BOOTSTRAP_ROOT)/bootstrap/lib/parsetools ; then mkdir $(BOOTSTRAP_ROOT)/bootstrap/lib/parsetools ; fi
@@ -647,18 +650,6 @@ tiny_secondary_bootstrap_copy:
 
 secondary_bootstrap_copy:
 	$(make_verbose)
-	$(V_at)if test ! -d $(BOOTSTRAP_ROOT)/bootstrap/lib/hipe ; then mkdir $(BOOTSTRAP_ROOT)/bootstrap/lib/hipe ; fi
-	$(V_at)if test ! -d $(BOOTSTRAP_ROOT)/bootstrap/lib/hipe/ebin ; then mkdir $(BOOTSTRAP_ROOT)/bootstrap/lib/hipe/ebin ; fi
-	$(V_at)for x in lib/hipe/$(HIPE_BOOTSTRAP_EBIN)/*.beam; do \
-		BN=`basename $$x`; \
-		TF=$(BOOTSTRAP_ROOT)/bootstrap/lib/hipe/ebin/$$BN; \
-		test -f  $$TF && \
-		test '!' -z "`find $$x -newer $$TF -print`" && \
-			cp $$x $$TF; \
-		test '!' -f $$TF && \
-			cp $$x $$TF; \
-		true; \
-	done
 	$(V_at)if test ! -d $(BOOTSTRAP_ROOT)/bootstrap/lib/parsetools ; then mkdir $(BOOTSTRAP_ROOT)/bootstrap/lib/parsetools ; fi
 	$(V_at)if test ! -d $(BOOTSTRAP_ROOT)/bootstrap/lib/parsetools/ebin ; then mkdir $(BOOTSTRAP_ROOT)/bootstrap/lib/parsetools/ebin ; fi
 	$(V_at)if test ! -d $(BOOTSTRAP_ROOT)/bootstrap/lib/parsetools/include ; then mkdir $(BOOTSTRAP_ROOT)/bootstrap/lib/parsetools/include ; fi
@@ -725,7 +716,7 @@ secondary_bootstrap_copy:
 tertiary_bootstrap_build:
 	$(make_verbose)cd lib && \
 	  ERL_TOP=$(ERL_TOP) PATH=$(BOOT_PREFIX)"$${PATH}" \
-		$(MAKE) opt TERTIARY_BOOTSTRAP=true
+		$(MAKE) opt TERTIARY_BOOTSTRAP=true ERL_COMPILE_WARNINGS_AS_ERRORS=yes
 
 tertiary_bootstrap_copy:
 	$(make_verbose)

@@ -684,7 +684,7 @@ trace_sched_aux(Process *p, ErtsProcLocks locks, Eterm what)
 	curr_func = 0;
     else {
 	if (!p->current)
-	    p->current = find_function_from_pc(p->i);
+	    p->current = erts_find_function_from_pc(p->i);
 	curr_func = p->current != NULL;
     }
 
@@ -948,11 +948,10 @@ seq_trace_output_generic(Eterm token, Eterm msg, Uint type,
  * or   {trace, Pid, return_to, {Mod, Func, Arity}}
  */
 void 
-erts_trace_return_to(Process *p, BeamInstr *pc)
+erts_trace_return_to(Process *p, ErtsCodePtr pc)
 {
+    const ErtsCodeMFA *cmfa = erts_find_function_from_pc(pc);
     Eterm mfa;
-
-    ErtsCodeMFA *cmfa = find_function_from_pc(pc);
 
     if (!cmfa) {
 	mfa = am_undefined;
@@ -1385,8 +1384,8 @@ trace_gc(Process *p, Eterm what, Uint size, Eterm msg)
 }
 
 void 
-monitor_long_schedule_proc(Process *p, ErtsCodeMFA *in_fp,
-                           ErtsCodeMFA *out_fp, Uint time)
+monitor_long_schedule_proc(Process *p, const ErtsCodeMFA *in_fp,
+                           const ErtsCodeMFA *out_fp, Uint time)
 {
     ErlHeapFragment *bp;
     ErlOffHeap *off_heap;
@@ -1939,7 +1938,7 @@ profile_runnable_proc(Process *p, Eterm status){
     Eterm *hp, msg;
     Eterm where = am_undefined;
     ErlHeapFragment *bp = NULL;
-    ErtsCodeMFA *cmfa = NULL;
+    const ErtsCodeMFA *cmfa = NULL;
 
     ErtsThrPrgrDelayHandle dhndl;
     Uint hsz = 4 + 6 + patch_ts_size(erts_system_profile_ts_type)-1;
@@ -1953,7 +1952,7 @@ profile_runnable_proc(Process *p, Eterm status){
         if (p->current) {
             cmfa = p->current;
         } else {
-            cmfa = find_function_from_pc(p->i);
+            cmfa = erts_find_function_from_pc(p->i);
         }
     }
 
@@ -2243,7 +2242,7 @@ sys_msg_dispatcher_func(void *unused)
     callbacks.wait = sys_msg_dispatcher_wait;
     callbacks.finalize_wait = sys_msg_dispatcher_fin_wait;
 
-    tpd = erts_thr_progress_register_managed_thread(NULL, &callbacks, 0);
+    tpd = erts_thr_progress_register_managed_thread(NULL, &callbacks, 0, 0);
 
     while (1) {
 	int end_wait = 0;
@@ -2262,6 +2261,7 @@ sys_msg_dispatcher_func(void *unused)
 
 	/* Fetch current trace message queue ... */
 	if (!sys_message_queue) {
+            wait = 1;
 	    erts_mtx_unlock(&smq_mtx);
 	    end_wait = 1;
 	    erts_thr_progress_active(tpd, 0);
@@ -2269,8 +2269,23 @@ sys_msg_dispatcher_func(void *unused)
 	    erts_mtx_lock(&smq_mtx);
 	}
 
-	while (!sys_message_queue)
-	    erts_cnd_wait(&smq_cnd, &smq_mtx);
+	while (!sys_message_queue) {
+            if (wait)
+                erts_cnd_wait(&smq_cnd, &smq_mtx);
+            if (sys_message_queue)
+                break;
+            wait = 1;
+	    erts_mtx_unlock(&smq_mtx);
+            /*
+             * Ensure thread progress continue. We might have
+             * been the last thread to go to sleep. In that case
+             * erts_thr_progress_finalize_wait() will take care
+             * of it...
+             */
+	    erts_thr_progress_finalize_wait(tpd);
+	    erts_thr_progress_prepare_wait(tpd);
+	    erts_mtx_lock(&smq_mtx);
+        }
 
 	local_sys_message_queue = sys_message_queue;
 	sys_message_queue = NULL;

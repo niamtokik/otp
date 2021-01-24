@@ -34,7 +34,7 @@ ERTSDIRS += start_scripts
 endif
 
 .PHONY: all
-all: smp
+all: $(if $(FLAVOR),$(FLAVOR),$(PRIMARY_FLAVOR))
 
 .PHONY: docs
 docs:
@@ -49,10 +49,10 @@ debug opt lcnt clean:
 	done
 	(cd preloaded/src && $(MAKE) ../ebin/erts.app)
 
-.PHONY: smp
-smp:
+.PHONY: $(FLAVORS)
+$(FLAVORS):
 	$(V_at)for type in $(TYPES); do \
-		( $(MAKE) $$type ) || exit $$?; \
+		( $(MAKE) FLAVOR=$@ $$type ) || exit $$?; \
 	done
 
 # Make erl script and erlc in $(ERL_TOP)/bin which runs the compiled version
@@ -108,6 +108,15 @@ local_setup:
 		$(ERL_TOP)/bin/start_sasl.script \
 		$(ERL_TOP)/bin/start_clean.script \
 		$(ERL_TOP)/bin/no_dot_erlang.script
+# On Android, the shell is found in /system/bin/sh instead of /bin/sh
+	@case "$(TARGET)" in \
+		*-android*) \
+		sed -i'' -e "s;/bin/sh;/system/bin/sh;" \
+			$(ERL_TOP)/bin/erl; \
+		sed -i'' -e "s;/bin/sh;/system/bin/sh;" \
+			$(ERL_TOP)/bin/cerl; \
+		;; \
+	esac
 
 # ----------------------------------------------------------------------
 # These are "convenience targets", provided as shortcuts for developers

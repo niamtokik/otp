@@ -33,6 +33,8 @@
 	 init_per_testcase/2, end_per_testcase/2,
          basic/1, reload_error/1, upgrade/1, heap_frag/1,
          t_on_load/1,
+         t_load_race/1,
+         t_call_nif_early/1,
          load_traced_nif/1,
          select/1, select_steal/1,
          monitor_process_a/1,
@@ -42,7 +44,6 @@
          monitor_process_purge/1,
          demonitor_process/1,
          monitor_frenzy/1,
-         hipe/1,
 	 types/1, many_args/1, binaries/1, get_string/1, get_atom/1,
 	 maps/1,
 	 api_macros/1,
@@ -93,7 +94,8 @@ all() ->
      select, select_steal,
      {group, monitor},
      monitor_frenzy,
-     hipe,
+     t_load_race,
+     t_call_nif_early,
      load_traced_nif,
      binaries, get_string, get_atom, maps, api_macros, from_array,
      iolist_as_binary, resource, resource_binary,
@@ -156,11 +158,6 @@ end_per_group(_,_) -> ok.
 init_per_testcase(t_on_load, Config) ->
     ets:new(nif_SUITE, [named_table]),
     Config;
-init_per_testcase(hipe, Config) ->
-    case erlang:system_info(hipe_architecture) of
-	undefined -> {skip, "HiPE is disabled"};
-	_ -> Config
-    end;
 init_per_testcase(nif_whereis_threaded, Config) ->
     case erlang:system_info(threads) of
         true -> Config;
@@ -501,6 +498,100 @@ t_on_load(Config) when is_list(Config) ->
     true = lists:member(nif_mod, erlang:system_info(taints)),
     verify_tmpmem(TmpMem),
     ok.
+
+%% Test erlang:load_nif/2 waiting for code_write_permission.
+t_load_race(Config) ->
+    Data = proplists:get_value(data_dir, Config),
+    File = filename:join(Data, "nif_mod"),
+    {ok,nif_mod,Bin} = compile:file(File, [binary,return_errors]),
+    {module,nif_mod} = erlang:load_module(nif_mod,Bin),
+    try
+        erts_debug:set_internal_state(code_write_permission, true),
+        Papa = self(),
+        spawn_link(fun() ->
+                           ok = nif_mod:load_nif_lib(Config, 1),
+                           Papa ! "NIF loaded"
+                   end),
+        timer:sleep(100),
+        timeout = receive_any(0)
+    after
+        true = erts_debug:set_internal_state(code_write_permission, false)
+    end,
+
+    "NIF loaded" = receive_any(),
+    true = erlang:delete_module(nif_mod),
+    true = erlang:purge_module(nif_mod),
+    ok.
+
+-define(NIFS_NOT_LOADED, 0).
+-define(NIFS_LOADED, 1).
+
+%% Test calling functions while loading their NIF implementation.
+%% Verify the change from beam to NIF is atomic.
+t_call_nif_early(Config) ->
+    Flag = atomics:new(1, []),
+    atomics:put(Flag, 1, ?NIFS_NOT_LOADED),
+
+    Data = proplists:get_value(data_dir, Config),
+    File = filename:join(Data, "nif_mod"),
+    {ok,nif_mod,Bin} = compile:file(File, [binary,return_errors]),
+    {module,nif_mod} = erlang:load_module(nif_mod,Bin),
+
+    Papa = self(),
+    NProcs = erlang:system_info(schedulers_online),
+    Pids = [spawn_opt(fun() ->
+                              undefined = nif_mod:lib_version(),
+                              Papa ! ready,
+                              early_caller_1(Flag, 1)
+                      end,
+                      [link, {scheduler,N}])
+            || N <- lists:seq(1, NProcs)],
+
+    [begin ok = receive ready -> ok end end
+     || _ <- Pids],
+
+    ok = nif_mod:load_nif_lib(Config, 1),
+    atomics:put(Flag, 1, ?NIFS_LOADED),
+
+    %% Wait for all scheduled load finishers to complete.
+    erts_debug:set_internal_state(wait, thread_progress),
+    erts_debug:set_internal_state(wait, thread_progress),
+    erts_debug:set_internal_state(wait, thread_progress),
+
+    [P ! done || P <- Pids],
+    ok.
+
+
+early_caller_1(Flag, BeamCnt) ->
+    case atomics:get(Flag, 1) of
+        ?NIFS_NOT_LOADED ->
+            case nif_mod_lib_version(BeamCnt) of
+                undefined ->  % Beam called
+                    early_caller_1(Flag, BeamCnt+1);
+                1 -> % Nif called
+                    atomics:put(Flag, 1, ?NIFS_LOADED),
+                    early_caller_2(BeamCnt, 1)
+            end;
+        ?NIFS_LOADED ->
+            %% Someone else called a NIF
+            early_caller_2(BeamCnt, 0)
+    end.
+
+early_caller_2(BeamCnt, NifCnt) ->
+    %% From now on we only expect to call NIFs
+    1 = nif_mod_lib_version(BeamCnt+NifCnt),
+    receive done ->
+            io:format("Beam calls=~p, Nif calls=~p\n", [BeamCnt, NifCnt+1])
+    after 0 ->
+            early_caller_2(BeamCnt, NifCnt+1)
+    end.
+
+nif_mod_lib_version(Cnt) ->
+    case Cnt rem 2 of
+        0 -> nif_mod:lib_version();
+        1 -> nif_mod:lib_version_check()
+    end.
+
 
 %% Test load of module where a NIF stub is already traced.
 load_traced_nif(Config) when is_list(Config) ->
@@ -1068,18 +1159,6 @@ gc_and_return(RetVal) ->
     erlang:garbage_collect(),
     RetVal.
 
-hipe(Config) when is_list(Config) ->
-    Data = proplists:get_value(data_dir, Config),
-    Priv = proplists:get_value(priv_dir, Config),
-    Src = filename:join(Data, "hipe_compiled"),
-    {ok,hipe_compiled} = c:c(Src, [{outdir,Priv},native]),
-    true = code:is_module_native(hipe_compiled),
-    {error, {notsup,_}} = hipe_compiled:try_load_nif(),
-    true = code:delete(hipe_compiled),
-    false = code:purge(hipe_compiled),
-    ok.
-
-
 %% Test NIF building heap fragments
 heap_frag(Config) when is_list(Config) ->    
     TmpMem = tmpmem(),
@@ -1335,6 +1414,21 @@ maps(Config) when is_list(Config) ->
                          {K+1, maps:put(K,K*100,Map)}
                  end,
                  {1,#{}}),
+
+    M5 = lists:foldl(fun(N, MapIn) ->
+                             {1, #{N := value}=MapOut} = make_map_put_nif(MapIn, N, value),
+                             MapOut
+                     end,
+                     #{},
+                     lists:seq(1,40)),
+    M6 = lists:foldl(fun(N, MapIn) ->
+                             {1, MapOut} = make_map_remove_nif(MapIn, N),
+                             ok = maps:get(N, MapOut, ok),
+                             MapOut
+                     end,
+                     M5,
+                     lists:seq(1,40)),
+    true = (M6 =:= #{}),
 
     has_duplicate_keys = maps_from_list_nif([{1,1},{1,1}]),
 
@@ -2423,29 +2517,52 @@ consume_timeslice_test(Config) when is_list(Config) ->
               end),
     erlang:yield(),
 
-    erlang:trace_pattern(DummyMFA, [], [local]),
+    erlang:trace_pattern(DummyMFA, [{'_', [], [{return_trace}]}], [local]),
     1 = erlang:trace(P, true, [call, running, procs, {tracer, self()}]),
 
     P ! Go,
 
     %% receive Go -> ok end,
     {trace, P, in, _} = next_tmsg(P),
-    
+
     %% consume_timeslice_nif(100),
     %% dummy_call(111)
-    {trace, P, out, _} = next_tmsg(P),
-    {trace, P, in, _} = next_tmsg(P),
-    {trace, P, call, {?MODULE,dummy_call,[111]}} = next_tmsg(P),
+    %%
+    %% Note that we may be scheduled out immediately before or immediately
+    %% "after" dummy_call(111) depending on when the emulator tests reductions.
+    %%
+    %% In either case, we should be rescheduled before the function returns.
+    Dummy_111 = {?MODULE,dummy_call,[111]},
+    case next_tmsg(P) of
+        {trace, P, out, _} ->
+            %% See dummy_call(111) above
+            {trace, P, in, _} = next_tmsg(P),
+            {trace, P, call, Dummy_111} = next_tmsg(P);
+        {trace, P, call, Dummy_111} ->
+            {trace, P, out, _} = next_tmsg(P),
+            {trace, P, in, _} = next_tmsg(P)
+    end,
+    {trace, P, return_from, DummyMFA, ok} = next_tmsg(P),
 
     %% consume_timeslice_nif(90),
     %% dummy_call(222)
-    {trace, P, call, {?MODULE,dummy_call,[222]}} = next_tmsg(P),
+    Dummy_222 = {?MODULE,dummy_call,[222]},
+    {trace, P, call, Dummy_222} = next_tmsg(P),
+    {trace, P, return_from, DummyMFA, ok} = next_tmsg(P),
 
     %% consume_timeslice_nif(10),
     %% dummy_call(333)
-    {trace, P, out, _} = next_tmsg(P),
-    {trace, P, in, _} = next_tmsg(P),
-    {trace, P, call, {?MODULE,dummy_call,[333]}} = next_tmsg(P),
+    Dummy_333 = {?MODULE,dummy_call,[333]},
+    case next_tmsg(P) of
+        {trace, P, out, _} ->
+            %% See dummy_call(111) above
+            {trace, P, in, _} = next_tmsg(P),
+            {trace, P, call, Dummy_333} = next_tmsg(P);
+        {trace, P, call, Dummy_333} ->
+            {trace, P, out, _} = next_tmsg(P),
+            {trace, P, in, _} = next_tmsg(P)
+    end,
+    {trace, P, return_from, DummyMFA, ok} = next_tmsg(P),
 
     %% 25,25,25,25, 25
     {trace, P, out, {?MODULE,consume_timeslice_nif,2}} = next_tmsg(P),
@@ -2453,9 +2570,17 @@ consume_timeslice_test(Config) when is_list(Config) ->
 
     %% consume_timeslice(1,true)
     %% dummy_call(444)
-    {trace, P, out, DummyMFA} = next_tmsg(P),
-    {trace, P, in, DummyMFA} = next_tmsg(P),
-    {trace, P, call, {?MODULE,dummy_call,[444]}} = next_tmsg(P),
+    Dummy_444 = {?MODULE,dummy_call,[444]},
+    case next_tmsg(P) of
+        {trace, P, out, DummyMFA} ->
+            %% See dummy_call(111) above
+            {trace, P, in, DummyMFA} = next_tmsg(P),
+            {trace, P, call, Dummy_444} = next_tmsg(P);
+        {trace, P, call, Dummy_444} ->
+            {trace, P, out, DummyMFA} = next_tmsg(P),
+            {trace, P, in, DummyMFA} = next_tmsg(P)
+    end,
+    {trace, P, return_from, DummyMFA, ok} = next_tmsg(P),
 
     %% exit(Done)
     {trace, P, exit, Done} = next_tmsg(P),

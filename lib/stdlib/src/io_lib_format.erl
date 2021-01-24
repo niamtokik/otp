@@ -449,9 +449,10 @@ fwrite_e(Fl, F, Adj, none, Pad) ->
 fwrite_e(Fl, F, Adj, P, Pad) when P >= 2 ->
     term(float_e(Fl, float_data(Fl), P), F, Adj, F, Pad).
 
-float_e(Fl, Fd, P) when Fl < 0.0 ->		%Negative numbers
-    [$-|float_e(-Fl, Fd, P)];
-float_e(_Fl, {Ds,E}, P) ->
+float_e(Fl, Fd, P) ->
+    signbit(Fl) ++ abs_float_e(abs(Fl), Fd, P).
+
+abs_float_e(_Fl, {Ds,E}, P) ->
     case float_man(Ds, 1, P-1) of
 	{[$0|Fs],true} -> [[$1|Fs]|float_exp(E)];
 	{Fs,false} -> [Fs|float_exp(E-1)]
@@ -503,14 +504,25 @@ fwrite_f(Fl, F, Adj, none, Pad) ->
 fwrite_f(Fl, F, Adj, P, Pad) when P >= 1 ->
     term(float_f(Fl, float_data(Fl), P), F, Adj, F, Pad).
 
-float_f(Fl, Fd, P) when Fl < 0.0 ->
-    [$-|float_f(-Fl, Fd, P)];
-float_f(Fl, {Ds,E}, P) when E =< 0 ->
-    float_f(Fl, {lists:duplicate(-E+1, $0)++Ds,1}, P);	%Prepend enough 0's
-float_f(_Fl, {Ds,E}, P) ->
+float_f(Fl, Fd, P) ->
+    signbit(Fl) ++ abs_float_f(abs(Fl), Fd, P).
+
+abs_float_f(Fl, {Ds,E}, P) when E =< 0 ->
+    abs_float_f(Fl, {lists:duplicate(-E+1, $0)++Ds,1}, P);	%Prepend enough 0's
+abs_float_f(_Fl, {Ds,E}, P) ->
     case float_man(Ds, E, P) of
 	{Fs,true} -> "1" ++ Fs;			%Handle carry
 	{Fs,false} -> Fs
+    end.
+
+%% signbit(Float) -> [$-] | []
+
+signbit(Fl) when Fl < 0.0 -> [$-];
+signbit(Fl) when Fl > 0.0 -> [];
+signbit(Fl) ->
+    case <<Fl/float>> of
+        <<1:1,_:63>> -> [$-];
+        _ -> []
     end.
 
 %% float_data([FloatChar]) -> {[Digit],Exponent}
@@ -525,22 +537,35 @@ float_data([D|Cs], Ds) when D >= $0, D =< $9 ->
 float_data([_|Cs], Ds) ->
     float_data(Cs, Ds).
 
-%%  Writes the shortest, correctly rounded string that converts
-%%  to Float when read back with list_to_float/1.
+%%  Returns a correctly rounded string that converts to Float when
+%%  read back with list_to_float/1.
 %%
-%%  See also "Printing Floating-Point Numbers Quickly and Accurately"
-%%  in Proceedings of the SIGPLAN '96 Conference on Programming
-%%  Language Design and Implementation.
+%%  When abs(Float) < float(1 bsl 53) the shortest such string is
+%%  returned, and otherwise the shortest such string using scientific
+%%  notation is returned. That is, scientific notation is used if and
+%%  only if scientific notation results in a shorter string than
+%%  normal notation when abs(Float) < float(1 bsl 53), and scientific
+%%  notation is used unconditionally if abs(Float) >= float(1 bsl
+%%  53). See comment in insert_decimal/2 for an explanation for why
+%%  float(1 bsl 53) is chosen as cutoff point.
+%%
+%%  The algorithm that is used to find the decimal number that is
+%%  represented by the returned String is described in "Printing
+%%  Floating-Point Numbers Quickly and Accurately" in Proceedings of
+%%  the SIGPLAN '96 Conference on Programming Language Design and
+%%  Implementation.
 
 -spec fwrite_g(float()) -> string().
 
-fwrite_g(0.0) ->
+fwrite_g(Fl) ->
+    signbit(Fl) ++ abs_fwrite_g(abs(Fl)).
+
+abs_fwrite_g(0.0) ->
     "0.0";
-fwrite_g(Float) when is_float(Float) ->
+abs_fwrite_g(Float) when is_float(Float) ->
     {Frac, Exp} = mantissa_exponent(Float),
     {Place, Digits} = fwrite_g_1(Float, Exp, Frac),
-    R = insert_decimal(Place, [$0 + D || D <- Digits]),
-    [$- || true <- [Float < 0.0]] ++ R.
+    insert_decimal(Place, [$0 + D || D <- Digits], Float).
 
 -define(BIG_POW, (1 bsl 52)).
 -define(MIN_EXP, (-1074)).
@@ -629,9 +654,9 @@ generate(R0, S, MPlus, MMinus, LowOk, HighOk) ->
             [D + 1]
     end.
 
-insert_decimal(0, S) ->
+insert_decimal(0, S, _) ->
     "0." ++ S;
-insert_decimal(Place, S) ->
+insert_decimal(Place, S, Float) ->
     L = length(S),
     if
         Place < 0;
@@ -649,7 +674,19 @@ insert_decimal(Place, S) ->
                     end;
                 true ->
                     if
-                        Place - L + 2 =< ExpCost ->
+                        %% All integers in the range [-2^53, 2^53] can
+                        %% be stored without loss of precision in an
+                        %% IEEE 754 64-bit double but 2^53+1 cannot be
+                        %% stored in an IEEE 754 64-bit double without
+                        %% loss of precision (float((1 bsl 53)+1) =:=
+                        %% float(1 bsl 53)). It thus makes sense to
+                        %% show floats that are >= 2^53 or <= -2^53 in
+                        %% scientific notation to indicate that the
+                        %% number is so large that there could be loss
+                        %% in precion when adding or subtracting 1.
+                        %%
+                        %% https://stackoverflow.com/questions/1848700/biggest-integer-that-can-be-stored-in-a-double?answertab=votes#tab-top
+                        Place - L + 2 =< ExpCost andalso abs(Float) < float(1 bsl 53) ->
                             S ++ lists:duplicate(Place - L, $0) ++ ".0";
                         true ->
                             insert_exp(ExpL, S)

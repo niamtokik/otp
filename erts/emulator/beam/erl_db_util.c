@@ -953,8 +953,6 @@ static Eterm match_spec_test(Process *p, Eterm against, Eterm spec, int trace);
 
 static Eterm seq_trace_fake(Process *p, Eterm arg1);
 
-static void db_free_tmp_uncompressed(DbTerm* obj);
-
 
 /*
 ** Interface routines.
@@ -1581,7 +1579,7 @@ Binary *db_match_compile(Eterm *matchexpr,
     Binary *bp = NULL;
     unsigned clause_start;
 
-    context.stack_limit = (char *) ethr_get_stacklimit();
+    context.stack_limit = (char *) erts_get_stacklimit();
     context.freason = BADARG;
 
     DMC_INIT_STACK(stack);
@@ -2018,7 +2016,7 @@ Eterm db_prog_match(Process *c_p,
     Eterm t;
     Eterm *esp;
     MatchVariable* variables;
-    ErtsCodeMFA *cp;
+    const ErtsCodeMFA *cp;
     const UWord *pc = prog->text;
     Eterm *ehp;
     Eterm ret;
@@ -2031,7 +2029,7 @@ Eterm db_prog_match(Process *c_p,
     Process *tmpp;
     Process *current_scheduled;
     ErtsSchedulerData *esdp;
-    Eterm (*bif)(Process*, ...);
+    BIF_RETTYPE (*bif)(BIF_ALIST);
     Eterm bif_args[3];
     int fail_label;
 #ifdef DMC_DEBUG
@@ -2338,8 +2336,8 @@ restart:
             *esp++ = t;
             break;
 	case matchCall0:
-	    bif = (Eterm (*)(Process*, ...)) *pc++;
-	    t = (*bif)(build_proc, bif_args);
+	    bif = (BIF_RETTYPE (*)(BIF_ALIST)) *pc++;
+	    t = (*bif)(build_proc, bif_args, NULL);
 	    if (is_non_value(t)) {
 		if (do_catch)
 		    t = FAIL_TERM;
@@ -2349,8 +2347,8 @@ restart:
 	    *esp++ = t;
 	    break;
 	case matchCall1:
-	    bif = (Eterm (*)(Process*, ...)) *pc++;
-	    t = (*bif)(build_proc, esp-1);
+	    bif = (BIF_RETTYPE (*)(BIF_ALIST)) *pc++;
+	    t = (*bif)(build_proc, esp-1, NULL);
 	    if (is_non_value(t)) {
 		if (do_catch)
 		    t = FAIL_TERM;
@@ -2360,10 +2358,10 @@ restart:
 	    esp[-1] = t;
 	    break;
 	case matchCall2:
-	    bif = (Eterm (*)(Process*, ...)) *pc++;
+	    bif = (BIF_RETTYPE (*)(BIF_ALIST)) *pc++;
 	    bif_args[0] = esp[-1];
 	    bif_args[1] = esp[-2];
-	    t = (*bif)(build_proc, bif_args);
+	    t = (*bif)(build_proc, bif_args, NULL);
 	    if (is_non_value(t)) {
 		if (do_catch)
 		    t = FAIL_TERM;
@@ -2374,11 +2372,11 @@ restart:
 	    esp[-1] = t;
 	    break;
 	case matchCall3:
-	    bif = (Eterm (*)(Process*, ...)) *pc++;
+	    bif = (BIF_RETTYPE (*)(BIF_ALIST)) *pc++;
 	    bif_args[0] = esp[-1];
 	    bif_args[1] = esp[-2];
 	    bif_args[2] = esp[-3];
-	    t = (*bif)(build_proc, bif_args);
+	    t = (*bif)(build_proc, bif_args, NULL);
 	    if (is_non_value(t)) {
 		if (do_catch)
 		    t = FAIL_TERM;
@@ -2650,7 +2648,7 @@ restart:
             t = c_p->stop[0];
             if (is_not_CP(t)) {
                 *esp++ = am_undefined;
-            } else if (!(cp = find_function_from_pc(cp_val(t)))) {
+            } else if (!(cp = erts_find_function_from_pc(cp_val(t)))) {
  		*esp++ = am_undefined;
  	    } else {
 		ehp = HAllocX(build_proc, 4, HEAP_XTRA);
@@ -5410,31 +5408,30 @@ void db_free_tmp_uncompressed(DbTerm* obj)
     erts_free(ERTS_ALC_T_TMP, obj);
 }
 
-Eterm db_match_dbterm(DbTableCommon* tb, Process* c_p, Binary* bprog,
-                      DbTerm* obj, Eterm** hpp, Uint extra)
+Eterm db_match_dbterm_uncompressed(DbTableCommon* tb, Process* c_p, Binary* bprog,
+                                   DbTerm* obj, enum erts_pam_run_flags flags)
 {
-    enum erts_pam_run_flags flags;
+
     Uint32 dummy;
     Eterm res;
 
-    if (tb->compress) {
-	obj = db_alloc_tmp_uncompressed(tb, obj);
-    }
-
-    flags = (hpp ?
-             ERTS_PAM_COPY_RESULT | ERTS_PAM_CONTIGUOUS_TUPLE :
-             ERTS_PAM_TMP_RESULT  | ERTS_PAM_CONTIGUOUS_TUPLE);
-
     res = db_prog_match(c_p, c_p,
                         bprog, make_tuple(obj->tpl), NULL, 0,
-			flags, &dummy);
+			flags|ERTS_PAM_CONTIGUOUS_TUPLE, &dummy);
 
-    if (is_value(res) && hpp!=NULL) {
-	*hpp = HAlloc(c_p, extra);
-    }
+    return res;
+}
 
+Eterm db_match_dbterm(DbTableCommon* tb, Process* c_p, Binary* bprog,
+                      DbTerm* obj, enum erts_pam_run_flags flags)
+{
+    Eterm res;
     if (tb->compress) {
-	db_free_tmp_uncompressed(obj);
+        obj = db_alloc_tmp_uncompressed(tb, obj);
+    }
+    res = db_match_dbterm_uncompressed(tb, c_p, bprog, obj, flags);
+    if (tb->compress) {
+        db_free_tmp_uncompressed(obj);
     }
     return res;
 }
@@ -5544,6 +5541,11 @@ void db_match_dis(Binary *bp)
 		    ErtsORefThing *rt = (ErtsORefThing *) t;
 		    num = rt->num;
 		    t += TermWords(ERTS_REF_THING_SIZE);
+		}
+		else if (is_pid_ref_thing(t)) {
+		    ErtsPRefThing *prt = (ErtsPRefThing *) t;
+		    num = prt->num;
+		    t += TermWords(ERTS_PID_REF_THING_SIZE);
 		}
 		else {
 		    ErtsMRefThing *mrt = (ErtsMRefThing *) t;

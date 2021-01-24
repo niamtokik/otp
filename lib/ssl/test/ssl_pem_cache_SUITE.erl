@@ -22,11 +22,29 @@
 
 -module(ssl_pem_cache_SUITE).
 
-%% Note: This directive should only be used in test suites.
--compile(export_all).
+-behaviour(ct_suite).
 
 -include_lib("common_test/include/ct.hrl").
 -include_lib("kernel/include/file.hrl").
+
+%% Callback functions
+-export([all/0,
+         groups/0,
+         init_per_suite/1,
+         end_per_suite/1,
+         init_per_group/2,
+         end_per_group/2,
+         init_per_testcase/2,
+         end_per_testcase/2]).
+
+%% Testcases
+-export([pem_cleanup/0,
+         pem_cleanup/1,
+         clear_pem_cache/0,
+         clear_pem_cache/1,
+         invalid_insert/0,
+         invalid_insert/1
+        ]).
 
 -define(CLEANUP_INTERVAL, 5000).
 
@@ -120,7 +138,7 @@ clear_pem_cache(Config) when is_list(Config) ->
     {status, _, _, StatusInfo} = sys:get_status(whereis(ssl_manager)),
     [_, _,_, _, Prop] = StatusInfo,
     State = ssl_test_lib:state(Prop),
-    [_,{FilRefDb, _} |_] = element(6, State),
+    [_,{FilRefDb, _} |_] = element(5, State),
     {Server, Client} = basic_verify_test_no_close(Config),
     CountReferencedFiles = fun({_, -1}, Acc) ->
 				   Acc;
@@ -175,7 +193,7 @@ get_pem_cache() ->
     {status, _, _, StatusInfo} = sys:get_status(whereis(ssl_manager)),
     [_, _,_, _, Prop] = StatusInfo,
     State = ssl_test_lib:state(Prop),
-    case element(6, State) of
+    case element(5, State) of
 	[_CertDb, _FileRefDb, PemCache| _] ->
 	    PemCache;
 	_ ->
@@ -186,7 +204,7 @@ get_fileref_db() ->
     {status, _, _, StatusInfo} = sys:get_status(whereis(ssl_manager)),
     [_, _,_, _, Prop] = StatusInfo,
     State = ssl_test_lib:state(Prop),
-    case element(6, State) of
+    case element(5, State) of
 	[_CertDb, {FileRefDb,_} | _] ->
 	    FileRefDb;
 	_ ->

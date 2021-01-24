@@ -59,7 +59,6 @@ struct enif_environment_t /* ErlNifEnv */
     Eterm* hp;
     Eterm* hp_end;
     ErlHeapFragment* heap_frag;
-    int fpe_was_unmasked;
     struct enif_tmp_obj_t* tmp_obj_list;
     int exception_thrown; /* boolean */
     Process *tracee;
@@ -109,7 +108,7 @@ typedef struct ErtsResource_
 
 extern Eterm erts_bld_resource_ref(Eterm** hp, ErlOffHeap*, ErtsResource*);
 
-extern BeamInstr* erts_call_nif_early(Process* c_p, ErtsCodeInfo* ci);
+extern ErtsCodePtr erts_call_nif_early(Process* c_p, const ErtsCodeInfo* ci);
 extern void erts_pre_nif(struct enif_environment_t*, Process*,
 			 struct erl_module_nif*, Process* tracee);
 extern void erts_post_nif(struct enif_environment_t* env);
@@ -124,7 +123,7 @@ extern Eterm erts_nif_taints(Process* p);
 extern void erts_print_nif_taints(fmtfn_t to, void* to_arg);
 
 /* Loads the specified NIF. The caller must have code write permission. */
-Eterm erts_load_nif(Process *c_p, BeamInstr *I, Eterm filename, Eterm args);
+Eterm erts_load_nif(Process *c_p, ErtsCodePtr I, Eterm filename, Eterm args);
 
 void erts_unload_nif(struct erl_module_nif* nif);
 extern void erl_nif_init(void);
@@ -137,7 +136,7 @@ extern Eterm erts_nif_call_function(Process *p, Process *tracee,
                                     int argc, Eterm *argv);
 
 int erts_call_dirty_nif(ErtsSchedulerData *esdp, Process *c_p,
-			BeamInstr *I, Eterm *reg);
+                        ErtsCodePtr I, Eterm *reg);
 ErtsMessage* erts_create_message_from_nif_env(ErlNifEnv* msg_env);
 
 
@@ -868,7 +867,7 @@ ERTS_GLB_INLINE Eterm erts_equeue_get(ErtsEQueue *q) {
 void erts_emasculate_writable_binary(ProcBin* pb);
 Eterm erts_new_heap_binary(Process *p, byte *buf, int len, byte** datap);
 Eterm erts_new_mso_binary(Process*, byte*, Uint);
-Eterm new_binary(Process*, byte*, Uint);
+Eterm new_binary(Process*, const byte*, Uint);
 Eterm erts_heap_factory_new_binary(ErtsHeapFactory *hfact, byte *buf,
                                    Uint len, Uint reserve_size);
 Eterm erts_realloc_binary(Eterm bin, size_t size);
@@ -889,8 +888,6 @@ void erts_bif_info_init(void);
 
 /* bif.c */
 
-void erts_write_bif_wrapper(Export *export, BeamInstr *address);
-
 void erts_queue_monitor_message(Process *,
 				ErtsProcLocks*,
 				Eterm,
@@ -898,7 +895,7 @@ void erts_queue_monitor_message(Process *,
 				Eterm,
 				Eterm);
 void erts_init_trap_export(Export* ep, Eterm m, Eterm f, Uint a,
-			   Eterm (*bif)(Process*, Eterm*, BeamInstr*));
+			   Eterm (*bif)(Process*, Eterm*, ErtsCodePtr));
 void erts_init_bif(void);
 Eterm erl_send(Process *p, Eterm to, Eterm msg);
 int erts_set_group_leader(Process *proc, Eterm new_gl);
@@ -944,15 +941,22 @@ extern Process *erts_code_purger;
 
 /* beam_load.c */
 typedef struct {
-    ErtsCodeMFA* mfa;		/* Pointer to: Mod, Name, Arity */
-    Uint needed;		/* Heap space needed for entire tuple */
-    Uint32 loc;			/* Location in source code */
-    Eterm* fname_ptr;		/* Pointer to fname table */
+    const ErtsCodeMFA* mfa;     /* Pointer to: Mod, Name, Arity */
+    Uint needed;                /* Heap space needed for entire tuple */
+    Uint32 loc;                 /* Location in source code */
+    const Eterm* fname_ptr;     /* Pointer to fname table */
 } FunctionInfo;
 
 Binary* erts_alloc_loader_state(void);
+
+/* Return the module name (a tagged atom) for the prepared code in the magic
+ * binary, or NIL if the binary does not contain prepared code. */
 Eterm erts_module_for_prepared_code(Binary* magic);
+
+/* Return a non-zero value if the prepared module has an on_load function,
+ * or 0 if it does not. */
 Eterm erts_has_code_on_load(Binary* magic);
+
 Eterm erts_prepare_loading(Binary* loader_state,  Process *c_p,
 			   Eterm group_leader, Eterm* modp,
 			   byte* code, Uint size);
@@ -961,23 +965,22 @@ Eterm erts_finish_loading(Binary* loader_state, Process* c_p,
 Eterm erts_preload_module(Process *c_p, ErtsProcLocks c_p_locks,
 			  Eterm group_leader, Eterm* mod, byte* code, Uint size);
 void init_load(void);
-ErtsCodeMFA* find_function_from_pc(BeamInstr* pc);
+const ErtsCodeMFA* erts_find_function_from_pc(ErtsCodePtr pc);
 Eterm* erts_build_mfa_item(FunctionInfo* fi, Eterm* hp,
-			   Eterm args, Eterm* mfa_p);
-void erts_set_current_function(FunctionInfo* fi, ErtsCodeMFA* mfa);
-Eterm erts_module_info_0(Process* p, Eterm module);
-Eterm erts_module_info_1(Process* p, Eterm module, Eterm what);
+			   Eterm args, Eterm* mfa_p, Eterm loc_tail);
+void erts_set_current_function(FunctionInfo* fi, const ErtsCodeMFA* mfa);
 Eterm erts_make_stub_module(Process* p, Eterm Mod, Eterm Beam, Eterm Info);
-int erts_commit_hipe_patch_load(Eterm hipe_magic_bin);
 
 /* beam_ranges.c */
 void erts_init_ranges(void);
 void erts_start_staging_ranges(int num_new);
 void erts_end_staging_ranges(int commit);
-void erts_update_ranges(BeamInstr* code, Uint size);
-void erts_remove_from_ranges(BeamInstr* code);
+void erts_update_ranges(const BeamCodeHeader* code, Uint size);
+void erts_remove_from_ranges(const BeamCodeHeader* code);
 UWord erts_ranges_sz(void);
-void erts_lookup_function_info(FunctionInfo* fi, BeamInstr* pc, int full_info);
+void erts_lookup_function_info(FunctionInfo* fi,
+                               ErtsCodePtr pc,
+                               int full_info);
 extern ErtsLiteralArea** erts_dump_lit_areas;
 extern Uint erts_dump_num_lit_areas;
 
@@ -989,7 +992,7 @@ void process_info(fmtfn_t, void *);
 void print_process_info(fmtfn_t, void *, Process*, ErtsProcLocks);
 void info(fmtfn_t, void *);
 void loaded(fmtfn_t, void *);
-void erts_print_base64(fmtfn_t to, void *to_arg, byte* src, Uint size);
+void erts_print_base64(fmtfn_t to, void *to_arg, const byte* src, Uint size);
 
 /* sighandler sys.c */
 int erts_set_signal(Eterm signal, Eterm type);
@@ -1000,9 +1003,9 @@ double erts_get_positive_zero_float(void);
 /* config.c */
 
 __decl_noreturn void __noreturn erts_exit_epilogue(void);
-__decl_noreturn void __noreturn erts_exit(int n, char*, ...);
+__decl_noreturn void __noreturn erts_exit(int n, const char*, ...);
 __decl_noreturn void __noreturn erts_flush_async_exit(int n, char*, ...);
-void erl_error(char*, va_list);
+void erl_error(const char*, va_list);
 
 /* This controls whether sharing-preserving copy is used by Erlang */
 
@@ -1161,12 +1164,12 @@ void print_pass_through(int, byte*, int);
 /* beam_emu.c */
 int catchlevel(Process*);
 void init_emulator(void);
-void process_main(Eterm* x_reg_array, FloatDef* f_reg_array);
+void process_main(ErtsSchedulerData *);
 void erts_dirty_process_main(ErtsSchedulerData *);
 Eterm build_stacktrace(Process* c_p, Eterm exc);
 Eterm expand_error_value(Process* c_p, Uint freason, Eterm Value);
 void erts_save_stacktrace(Process* p, struct StackTrace* s, int depth);
-BeamInstr *erts_printable_return_address(Process* p, Eterm *E) ERTS_NOINLINE;
+ErtsCodePtr erts_printable_return_address(Process* p, Eterm *E) ERTS_NOINLINE;
 
 /* erl_init.c */
 
@@ -1191,6 +1194,11 @@ extern int erts_no_line_info;
 extern Eterm erts_error_logger_warnings;
 extern int erts_initialized;
 extern int erts_compat_rel;
+
+#ifdef BEAMASM
+extern int erts_asm_dump;
+#endif
+
 void erl_start(int, char**);
 void erts_usage(void);
 Eterm erts_preloaded(Process* p);
@@ -1269,9 +1277,10 @@ Uint64 erts_timestamp_millis(void);
 Export* erts_find_function(Eterm, Eterm, unsigned int, ErtsCodeIndex);
 
 /* ERTS_NOINLINE prevents link-time optimization across modules */
-void *erts_calc_stacklimit(char *prev_c, UWord stacksize) ERTS_NOINLINE;
+const void *erts_get_stacklimit(void);
 int erts_check_below_limit(char *ptr, char *limit) ERTS_NOINLINE;
 int erts_check_above_limit(char *ptr, char *limit) ERTS_NOINLINE;
+
 void *erts_ptr_id(void *ptr) ERTS_NOINLINE;
 int erts_check_if_stack_grows_downwards(char *ptr) ERTS_NOINLINE;
 
@@ -1313,6 +1322,7 @@ void erts_debug_foreach_persistent_term_off_heap(void (*func)(ErlOffHeap *, void
                                                  void *arg);
 int erts_debug_have_accessed_literal_area(ErtsLiteralArea *lap);
 void erts_debug_save_accessed_literal_area(ErtsLiteralArea *lap);
+Eterm erts_debug_persistent_term_xtra_info(Process* c_p);
 
 /* external.c */
 void erts_init_external(void);
@@ -1438,16 +1448,21 @@ Eterm collect_memory(Process *);
 void dump_memory_to_fd(int);
 int dump_memory_data(const char *);
 
+Eterm erts_unary_minus(Process* p, Eterm arg1);
 Eterm erts_mixed_plus(Process* p, Eterm arg1, Eterm arg2);
 Eterm erts_mixed_minus(Process* p, Eterm arg1, Eterm arg2);
 Eterm erts_mixed_times(Process* p, Eterm arg1, Eterm arg2);
 Eterm erts_mixed_div(Process* p, Eterm arg1, Eterm arg2);
+
+int erts_int_div_rem(Process* p, Eterm arg1, Eterm arg2, Eterm *q, Eterm *r);
 Eterm erts_int_div(Process* p, Eterm arg1, Eterm arg2);
 Eterm erts_int_rem(Process* p, Eterm arg1, Eterm arg2);
-Eterm erts_band(Process* p, Eterm arg1, Eterm arg2);
-Eterm erts_bor(Process* p, Eterm arg1, Eterm arg2);
 Eterm erts_bxor(Process* p, Eterm arg1, Eterm arg2);
+Eterm erts_bsr(Process* p, Eterm arg1, Eterm arg2);
+Eterm erts_bsl(Process* p, Eterm arg1, Eterm arg2);
 Eterm erts_bnot(Process* p, Eterm arg);
+Eterm erts_bor(Process* p, Eterm arg1, Eterm arg2);
+Eterm erts_band(Process* p, Eterm arg1, Eterm arg2);
 
 Eterm erts_gc_mixed_plus(Process* p, Eterm* reg, Uint live);
 Eterm erts_gc_mixed_minus(Process* p, Eterm* reg, Uint live);
@@ -1584,7 +1599,7 @@ dtrace_pid_str(Eterm pid, char *process_buf)
                       pid_number(pid),
                       pid_serial(pid));
     else if (is_port(pid))
-        erts_snprintf(process_buf, DTRACE_TERM_BUF_SIZE, "#Port<%lu.%lu>",
+        erts_snprintf(process_buf, DTRACE_TERM_BUF_SIZE, "#Port<%lu.%b64u>",
                       port_channel_no(pid),
                       port_number(pid));
 }

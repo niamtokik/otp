@@ -18,15 +18,29 @@
 %% %CopyrightEnd%
 %%
 -module(ssh_bench_SUITE).
--compile(export_all).
+
+-export([
+         suite/0,
+         all/0,
+         init_per_suite/1,
+         end_per_suite/1,
+         init_per_testcase/2,
+         end_per_testcase/2
+        ]).
+
+-export([
+         connect/1,
+         transfer_text/1,
+         send_wait_acc/3
+        ]).
 
 -include_lib("common_test/include/ct_event.hrl").
 -include_lib("common_test/include/ct.hrl").
 
--include_lib("ssh/src/ssh.hrl").
--include_lib("ssh/src/ssh_transport.hrl").
--include_lib("ssh/src/ssh_connect.hrl").
--include_lib("ssh/src/ssh_auth.hrl").
+-include("ssh.hrl").
+-include("ssh_transport.hrl").
+-include("ssh_connect.hrl").
+-include("ssh_auth.hrl").
 
 %%%================================================================
 %%%
@@ -252,13 +266,13 @@ median(Data) when is_list(Data) ->
             1 ->
                 lists:nth(N div 2 + 1, SortedData)
         end,
-    ct:pal("median(~p) = ~p",[SortedData,Median]),
+    ct:log("median(~p) = ~p",[SortedData,Median]),
     Median.
 
 %%%----------------------------------------------------------------
 report(LabelList, Value) ->
     Label = report_chars(lists:concat(LabelList)),
-    ct:pal("ct_event:notify ~p: ~p", [Label, Value]),
+    ct:log("ct_event:notify ~p: ~p", [Label, Value]),
     ct_event:notify(
       #event{name = benchmark_data,
              data = [{suite, ?MODULE},

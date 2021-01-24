@@ -123,6 +123,8 @@ wcc(Wc, Error) ->
     {'EXIT',{{badpattern,Error},
 	     [{filelib,wildcard,2,_}|_]}} = (catch filelib:wildcard(Wc, ".")).
 
+disable_prefix_opt([_,$:|_]=Wc) ->
+    Wc;
 disable_prefix_opt([C|Wc]) when $a =< C, C =< $z; C =:= $@ ->
     %% There is an optimization for patterns that have a literal prefix
     %% (such as "lib/compiler/ebin/*"). Test that we'll get the same result
@@ -574,7 +576,7 @@ file_props_symlink(Config) ->
     end.
 
 find_source(Config) when is_list(Config) ->
-    %% filename:find_{file,source}() does not work if the files are
+    %% filelib:find_{file,source}() does not work if the files are
     %% cover-compiled. To make sure that the test does not fail
     %% when the STDLIB is cover-compiled, search for modules in
     %% the compiler application.

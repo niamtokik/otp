@@ -47,9 +47,12 @@ MODULES= \
 	dtls_connection \
 	dtls_connection_sup \
 	dtls_handshake \
+	dtls_gen_connection \
 	dtls_listener_sup \
 	dtls_packet_demux \
 	dtls_record \
+	dtls_server_sup\
+	dtls_server_session_cache_sup\
 	dtls_sup \
 	dtls_socket \
 	dtls_v1 \
@@ -63,7 +66,6 @@ MODULES= \
 	ssl_cipher \
 	ssl_cipher_format \
 	ssl_config \
-	ssl_connection \
 	ssl_connection_sup \
 	ssl_crl \
 	ssl_crl_cache \
@@ -72,6 +74,7 @@ MODULES= \
 	ssl_dist_admin_sup \
 	ssl_dist_connection_sup \
 	ssl_dist_sup \
+        ssl_gen_statem \
 	ssl_handshake \
 	ssl_listen_tracker_sup \
 	ssl_logger \
@@ -79,14 +82,19 @@ MODULES= \
 	ssl_pem_cache \
 	ssl_pkix_db \
 	ssl_record \
+	ssl_server_session_cache \
+	ssl_server_session_cache_db \
+	ssl_server_session_cache_sup \
 	ssl_session \
 	ssl_session_cache \
 	ssl_srp_primes \
 	ssl_sup \
 	tls_bloom_filter \
+	tls_dtls_connection \
 	tls_connection \
 	tls_connection_sup \
 	tls_connection_1_3 \
+	tls_gen_connection \
 	tls_handshake \
 	tls_handshake_1_3 \
 	tls_record \
@@ -151,11 +159,11 @@ endif
 # ----------------------------------------------------
 # FLAGS
 # ----------------------------------------------------
-EXTRA_ERLC_FLAGS = +warn_unused_vars
+EXTRA_ERLC_FLAGS = +warn_unused_vars -Werror
 ERL_COMPILE_FLAGS += -I$(ERL_TOP)/lib/kernel/src \
 	-pz $(EBIN) \
 	-pz $(ERL_TOP)/lib/public_key/ebin \
-	$(EXTRA_ERLC_FLAGS) -DVSN=\"$(VSN)\"
+	$(EXTRA_ERLC_FLAGS) -DVSN=\"$(VSN)\" 
 
 # ----------------------------------------------------
 # Targets

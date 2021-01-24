@@ -38,6 +38,7 @@ armv7l-unknown-linux-gnueabihf
 i686-pc-linux-gnu
 x86_64-unknown-linux-gnu
 i386-apple-darwin[0-9]*.[0-9]*.[0-9]*
+arm-apple-darwin[0-9]*.[0-9]*.[0-9]*
 x86_64-apple-darwin[0-9]*.[0-9]*.[0-9]*
 x86_64-unknown-freebsd[0-9]*.[0-9]*
 sparc-sun-solaris[0-9]*.[0-9]*
@@ -287,6 +288,7 @@ JAVADOC-GENERATED
 /erts/doc/src/*.fo
 /erts/doc/xml/*.xml
 /erts/doc/xml/figures/*.png
+/erts/doc/xml/figures/*.svg
 /erts/doc/chunks/*.chunk
 /erts/doc/man[0-9]/*.[0-9]
 /erts/doc/CONF_INFO
@@ -337,6 +339,7 @@ JAVADOC-GENERATED
 
 /lib/kernel/src/inet_dns_record_adts.hrl
 /lib/kernel/test/gen_tcp_dist.erl
+/lib/kernel/test/erl_uds_dist.erl
 
 # kernel
 
@@ -408,6 +411,7 @@ JAVADOC-GENERATED
 /lib/wx/wx-*.ez
 /lib/wx/CONF_INFO
 /lib/wx/doc/src/ref_man.xml
+/lib/wx/doc/src/specs.xml
 /lib/wx/priv/wxe_driver.*
 /lib/wx/priv/erl_gl.*
 

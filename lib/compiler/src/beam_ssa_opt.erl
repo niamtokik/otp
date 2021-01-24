@@ -96,7 +96,7 @@ fixpoint(_FuncIds, _Order, _Passes, StMap, FuncDb, 0) ->
 fixpoint(FuncIds0, Order0, Passes, StMap0, FuncDb0, N) ->
     {StMap, FuncDb} = phase(FuncIds0, Passes, StMap0, FuncDb0),
     Repeat = changed(FuncIds0, FuncDb0, FuncDb, StMap0, StMap),
-    case cerl_sets:size(Repeat) of
+    case sets:size(Repeat) of
         0 ->
             %% No change. Fixpoint reached.
             {StMap, FuncDb};
@@ -106,7 +106,7 @@ fixpoint(FuncIds0, Order0, Passes, StMap0, FuncDb0, N) ->
             %% information.
             {OrderA, OrderB} = Order0,
             Order = {OrderB, OrderA},
-            FuncIds = [Id || Id <- OrderA, cerl_sets:is_element(Id, Repeat)],
+            FuncIds = [Id || Id <- OrderA, sets:is_element(Id, Repeat)],
             fixpoint(FuncIds, Order, Passes, StMap, FuncDb, N - 1)
     end.
 
@@ -133,7 +133,7 @@ changed(PrevIds, FuncDb0, FuncDb, StMap0, StMap) ->
     %% have been updated for functions not included in the previous run.
 
     F = fun(Id, A) ->
-                case cerl_sets:is_element(Id, A) of
+                case sets:is_element(Id, A) of
                     true ->
                         A;
                     false ->
@@ -162,7 +162,7 @@ changed(PrevIds, FuncDb0, FuncDb, StMap0, StMap) ->
                         end
                 end
         end,
-    Ids = foldl(F, cerl_sets:new(), maps:keys(FuncDb)),
+    Ids = foldl(F, sets:new([{version, 2}]), maps:keys(FuncDb)),
 
     %% From all functions that were optimized in the previous run,
     %% find the functions that had any change in the SSA code. Those
@@ -175,7 +175,7 @@ changed(PrevIds, FuncDb0, FuncDb, StMap0, StMap) ->
     %% optimization turned off (and thus not included in FuncDb).
 
     foldl(fun(Id, A) ->
-                  case cerl_sets:is_element(Id, A) of
+                  case sets:is_element(Id, A) of
                       true ->
                           %% Already scheduled for another optimization.
                           %% No need to compare the SSA code.
@@ -184,17 +184,17 @@ changed(PrevIds, FuncDb0, FuncDb, StMap0, StMap) ->
                           %% Compare the SSA code before and after optimization.
                           case {map_get(Id, StMap0),map_get(Id, StMap)} of
                               {Same,Same} -> A;
-                              {_,_} -> cerl_sets:add_element(Id, A)
+                              {_,_} -> sets:add_element(Id, A)
                           end
                   end
           end, Ids, PrevIds).
 
 add_changed([Id|Ids], Opts, FuncDb, S0) when is_map_key(Id, FuncDb) ->
-    case cerl_sets:is_element(Id, S0) of
+    case sets:is_element(Id, S0) of
         true ->
             add_changed(Ids, Opts, FuncDb, S0);
         false ->
-            S1 = cerl_sets:add_element(Id, S0),
+            S1 = sets:add_element(Id, S0),
             #func_info{in=In,out=Out} = map_get(Id, FuncDb),
             S2 = case member(callers, Opts) of
                      true -> add_changed(In, Opts, FuncDb, S1);
@@ -258,12 +258,15 @@ prologue_passes(Opts) ->
           ?PASS(ssa_opt_tuple_size),
           ?PASS(ssa_opt_record),
           ?PASS(ssa_opt_cse),                   % Helps the first type pass.
-          ?PASS(ssa_opt_live),                  % ...
-          ?PASS(ssa_opt_receive_after)],
+          ?PASS(ssa_opt_live)],                 % ...
     passes_1(Ps, Opts).
 
 module_passes(Opts) ->
-    Ps0 = [{ssa_opt_type_start,
+    Ps0 = [{ssa_opt_bc_size,
+            fun({StMap, FuncDb}) ->
+                    {beam_ssa_bc_size:opt(StMap), FuncDb}
+            end},
+           {ssa_opt_type_start,
             fun({StMap, FuncDb}) ->
                     beam_ssa_type:opt_start(StMap, FuncDb)
             end}],
@@ -356,9 +359,10 @@ fdb_fs([#b_function{ args=Args,bs=Bs }=F | Fs], Exports, FuncDb0) ->
                                                   arg_types=ArgTypes }}
               end,
 
-    FuncDb = beam_ssa:fold_rpo(fun(_L, #b_blk{is=Is}, FuncDb) ->
+    RPO = beam_ssa:rpo(Bs),
+    FuncDb = beam_ssa:fold_blocks(fun(_L, #b_blk{is=Is}, FuncDb) ->
                                        fdb_is(Is, Id, FuncDb)
-                               end, FuncDb1, Bs),
+                               end, RPO, FuncDb1, Bs),
 
     fdb_fs(Fs, Exports, FuncDb);
 fdb_fs([], _Exports, FuncDb) ->
@@ -373,9 +377,10 @@ fdb_is([#b_set{op=call,
                                name=#b_literal{val=load_nif}},
                      _Path, _LoadInfo]} | _Is], _Caller, _FuncDb) ->
     throw(load_nif);
-fdb_is([#b_set{op=make_fun,
+fdb_is([#b_set{op=MakeFun,
                args=[#b_local{}=Callee | _]} | Is],
-       Caller, FuncDb) ->
+       Caller, FuncDb) when MakeFun =:= make_fun;
+                            MakeFun =:= old_make_fun ->
     %% The make_fun instruction's type depends on the return type of the
     %% function in question, so we treat this as a function call.
     fdb_is(Is, Caller, fdb_update(Caller, Callee, FuncDb));
@@ -411,16 +416,16 @@ get_call_order_po(StMap, FuncDb) ->
 
 gco_po(FuncDb) ->
     All = sort(maps:keys(FuncDb)),
-    {RPO,_} = gco_rpo(All, FuncDb, cerl_sets:new(), []),
+    {RPO,_} = gco_rpo(All, FuncDb, sets:new([{version, 2}]), []),
     reverse(RPO).
 
 gco_rpo([Id|Ids], FuncDb, Seen0, Acc0) ->
-    case cerl_sets:is_element(Id, Seen0) of
+    case sets:is_element(Id, Seen0) of
         true ->
             gco_rpo(Ids, FuncDb, Seen0, Acc0);
         false ->
             #func_info{out=Successors} = map_get(Id, FuncDb),
-            Seen1 = cerl_sets:add_element(Id, Seen0),
+            Seen1 = sets:add_element(Id, Seen0),
             {Acc,Seen} = gco_rpo(Successors, FuncDb, Seen1, Acc0),
             gco_rpo(Ids, FuncDb, Seen, [Id|Acc])
     end;
@@ -452,7 +457,8 @@ ssa_opt_trim_unreachable({#opt_st{ssa=Blocks}=St, FuncDb}) ->
     {St#opt_st{ssa=beam_ssa:trim_unreachable(Blocks)}, FuncDb}.
 
 ssa_opt_merge_blocks({#opt_st{ssa=Blocks0}=St, FuncDb}) ->
-    Blocks = beam_ssa:merge_blocks(Blocks0),
+    RPO = beam_ssa:rpo(Blocks0),
+    Blocks = beam_ssa:merge_blocks(RPO, Blocks0),
     {St#opt_st{ssa=Blocks}, FuncDb}.
 
 %%%
@@ -468,10 +474,13 @@ ssa_opt_merge_blocks({#opt_st{ssa=Blocks0}=St, FuncDb}) ->
 ssa_opt_split_blocks({#opt_st{ssa=Blocks0,cnt=Count0}=St, FuncDb}) ->
     P = fun(#b_set{op={bif,element}}) -> true;
            (#b_set{op=call}) -> true;
+           (#b_set{op=bs_init_writable}) -> true;
            (#b_set{op=make_fun}) -> true;
+           (#b_set{op=old_make_fun}) -> true;
            (_) -> false
         end,
-    {Blocks,Count} = beam_ssa:split_blocks(P, Blocks0, Count0),
+    RPO = beam_ssa:rpo(Blocks0),
+    {Blocks,Count} = beam_ssa:split_blocks(RPO, P, Blocks0, Count0),
     {St#opt_st{ssa=Blocks,cnt=Count}, FuncDb}.
 
 %%%
@@ -1027,7 +1036,7 @@ cse_suitable(#b_set{}) -> false.
 -record(fs,
         {s=undefined :: 'undefined' | 'cleared',
          regs=#{} :: #{beam_ssa:b_var():=beam_ssa:b_var()},
-         vars=cerl_sets:new() :: cerl_sets:set(),
+         vars=sets:new([{version, 2}]) :: sets:set(),
          fail=none :: 'none' | beam_ssa:label(),
          non_guards :: gb_sets:set(beam_ssa:label()),
          bs :: beam_ssa:block_map()
@@ -1203,7 +1212,7 @@ float_make_op(#b_set{op={bif,Op},dst=Dst,args=As0,anno=Anno}=I0,
     {Fr,Count2} = new_reg('@fr', Count1),
     FrDst = #b_var{name=Fr},
     I = I0#b_set{op={float,Op},dst=FrDst,args=As},
-    Vs = cerl_sets:add_element(Dst, Vs0),
+    Vs = sets:add_element(Dst, Vs0),
     Rs = Rs1#{Dst=>FrDst},
     Is = append(Is0) ++ [I],
     case S of
@@ -1287,23 +1296,22 @@ ssa_opt_live({#opt_st{ssa=Linear0}=St, FuncDb}) ->
 live_opt([{L,Blk0}|Bs], LiveMap0, Blocks) ->
     Blk1 = beam_ssa_share:block(Blk0, Blocks),
     Successors = beam_ssa:successors(Blk1),
-    Live0 = live_opt_succ(Successors, L, LiveMap0, gb_sets:empty()),
+    Live0 = live_opt_succ(Successors, L, LiveMap0, sets:new([{version, 2}])),
     {Blk,Live} = live_opt_blk(Blk1, Live0),
     LiveMap = live_opt_phis(Blk#b_blk.is, L, Live, LiveMap0),
     live_opt(Bs, LiveMap, Blocks#{L:=Blk});
 live_opt([], _, Acc) -> Acc.
 
 live_opt_succ([S|Ss], L, LiveMap, Live0) ->
-    Key = {S,L},
     case LiveMap of
-        #{Key:=Live} ->
+        #{{S,L}:=Live} ->
             %% The successor has a phi node, and the value for
             %% this block in the phi node is a variable.
-            live_opt_succ(Ss, L, LiveMap, gb_sets:union(Live, Live0));
+            live_opt_succ(Ss, L, LiveMap, sets:union(Live0, Live));
         #{S:=Live} ->
             %% No phi node in the successor, or the value for
             %% this block in the phi node is a literal.
-            live_opt_succ(Ss, L, LiveMap, gb_sets:union(Live, Live0));
+            live_opt_succ(Ss, L, LiveMap, sets:union(Live0, Live));
         #{} ->
             %% A peek_message block which has not been processed yet.
             live_opt_succ(Ss, L, LiveMap, Live0)
@@ -1321,7 +1329,7 @@ live_opt_phis(Is, L, Live0, LiveMap0) ->
             case [{P,V} || {#b_var{}=V,P} <- PhiArgs] of
                 [_|_]=PhiVars ->
                     PhiLive0 = rel2fam(PhiVars),
-                    PhiLive = [{{L,P},gb_sets:union(gb_sets:from_list(Vs), Live0)} ||
+                    PhiLive = [{{L,P},sets:union(sets:from_list(Vs, [{version, 2}]), Live0)} ||
                                   {P,Vs} <- PhiLive0],
                     maps:merge(LiveMap, maps:from_list(PhiLive));
                 [] ->
@@ -1331,12 +1339,13 @@ live_opt_phis(Is, L, Live0, LiveMap0) ->
     end.
 
 live_opt_blk(#b_blk{is=Is0,last=Last}=Blk, Live0) ->
-    Live1 = gb_sets:union(Live0, gb_sets:from_ordset(beam_ssa:used(Last))),
+    Live1 = sets:union(Live0, sets:from_list(beam_ssa:used(Last), [{version, 2}])),
     {Is,Live} = live_opt_is(reverse(Is0), Live1, []),
     {Blk#b_blk{is=Is},Live}.
 
-live_opt_is([#b_set{op=phi,dst=Dst}=I|Is], Live, Acc) ->
-    case gb_sets:is_member(Dst, Live) of
+live_opt_is([#b_set{op=phi,dst=Dst}=I|Is], Live0, Acc) ->
+    Live = sets:del_element(Dst, Live0),
+    case sets:is_element(Dst, Live0) of
         true ->
             live_opt_is(Is, Live, [I|Acc]);
         false ->
@@ -1345,10 +1354,10 @@ live_opt_is([#b_set{op=phi,dst=Dst}=I|Is], Live, Acc) ->
 live_opt_is([#b_set{op={succeeded,guard},dst=SuccDst,args=[Dst]}=SuccI,
              #b_set{op=Op,dst=Dst}=I0|Is],
             Live0, Acc) ->
-    case {gb_sets:is_member(SuccDst, Live0),
-          gb_sets:is_member(Dst, Live0)} of
+    case {sets:is_element(SuccDst, Live0),
+          sets:is_element(Dst, Live0)} of
         {true, true} ->
-            Live = gb_sets:delete(SuccDst, Live0),
+            Live = sets:del_element(SuccDst, Live0),
             live_opt_is([I0|Is], Live, [SuccI|Acc]);
         {true, false} ->
             %% The result of the instruction before {succeeded,guard} is
@@ -1368,8 +1377,8 @@ live_opt_is([#b_set{op={succeeded,guard},dst=SuccDst,args=[Dst]}=SuccI,
                     I = I0#b_set{op=has_map_field,dst=SuccDst},
                     live_opt_is([I|Is], Live0, Acc);
                 _ ->
-                    Live1 = gb_sets:delete(SuccDst, Live0),
-                    Live = gb_sets:add(Dst, Live1),
+                    Live1 = sets:del_element(SuccDst, Live0),
+                    Live = sets:add_element(Dst, Live1),
                     live_opt_is([I0|Is], Live, [SuccI|Acc])
             end;
         {false, true} ->
@@ -1378,19 +1387,19 @@ live_opt_is([#b_set{op={succeeded,guard},dst=SuccDst,args=[Dst]}=SuccI,
             live_opt_is(Is, Live0, Acc)
     end;
 live_opt_is([#b_set{dst=Dst}=I|Is], Live0, Acc) ->
-    case gb_sets:is_member(Dst, Live0) of
+    case sets:is_element(Dst, Live0) of
         true ->
-            LiveUsed = gb_sets:from_ordset(beam_ssa:used(I)),
-            Live1 = gb_sets:union(Live0, LiveUsed),
-            Live = gb_sets:delete(Dst, Live1),
+            LiveUsed = sets:from_list(beam_ssa:used(I), [{version, 2}]),
+            Live1 = sets:union(Live0, LiveUsed),
+            Live = sets:del_element(Dst, Live1),
             live_opt_is(Is, Live, [I|Acc]);
         false ->
             case beam_ssa:no_side_effect(I) of
                 true ->
                     live_opt_is(Is, Live0, Acc);
                 false ->
-                    LiveUsed = gb_sets:from_ordset(beam_ssa:used(I)),
-                    Live = gb_sets:union(Live0, LiveUsed),
+                    LiveUsed = sets:from_list(beam_ssa:used(I), [{version, 2}]),
+                    Live = sets:union(Live0, LiveUsed),
                     live_opt_is(Is, Live, [I|Acc])
             end
     end;
@@ -1398,68 +1407,80 @@ live_opt_is([], Live, Acc) ->
     {Acc,Live}.
 
 %%%
-%%% Do a strength reduction of try/catch and catch.
+%%% try/catch optimization.
 %%%
-%%% In try/catch constructs where the expression is restricted
-%%% (essentially a guard expression) and the error reason is ignored
-%%% in the catch part, such as:
+%%% Attemps to rewrite try/catches as guards when we know the exception won't
+%%% be inspected in any way, and removes try/catches whose expressions will
+%%% never throw.
 %%%
-%%%   try
-%%%      <RestrictedExpression>
-%%%   catch
-%%%      _:_ ->
-%%%        ...
-%%%   end
-%%%
-%%% the try/catch can be eliminated by simply removing the `new_try_tag`,
-%%% `landingpad`, and `kill_try_tag` instructions.
 
 ssa_opt_try({#opt_st{ssa=Linear0}=St, FuncDb}) ->
-    Linear1 = opt_try(Linear0),
+    RevLinear = reduce_try(Linear0, []),
+
+    EmptySet = sets:new([{version, 2}]),
+    Linear1 = trim_try(RevLinear, EmptySet, EmptySet, []),
+
     %% Unreachable blocks with tuple extractions will cause problems
     %% for ssa_opt_sink.
     Linear = beam_ssa:trim_unreachable(Linear1),
+
     {St#opt_st{ssa=Linear}, FuncDb}.
 
-opt_try([{L,#b_blk{is=[#b_set{op=new_try_tag}],
-                      last=Last}=Blk0}|Bs0]) ->
+%% Does a strength reduction of try/catch and catch.
+%%
+%% In try/catch constructs where the expression is restricted
+%% (essentially a guard expression) and the error reason is ignored
+%% in the catch part, such as:
+%%
+%%   try
+%%      <RestrictedExpression>
+%%   catch
+%%      _:_ ->
+%%        ...
+%%   end
+%%
+%% the try/catch can be eliminated by simply removing the `new_try_tag`,
+%% `landingpad`, and `kill_try_tag` instructions.
+reduce_try([{L,#b_blk{is=[#b_set{op=new_try_tag}],
+                      last=Last}=Blk0} | Bs0], Acc) ->
     #b_br{succ=Succ,fail=Fail} = Last,
-    Ws = cerl_sets:from_list([Succ,Fail]),
-    try do_opt_try(Bs0, Ws) of
+    Ws = sets:from_list([Succ,Fail], [{version, 2}]),
+    try do_reduce_try(Bs0, Ws) of
         Bs ->
             Blk = Blk0#b_blk{is=[],
                              last=#b_br{bool=#b_literal{val=true},
                                         succ=Succ,fail=Succ}},
-            [{L,Blk}|opt_try(Bs)]
+            reduce_try(Bs, [{L, Blk} | Acc])
     catch
         throw:not_possible ->
-            [{L,Blk0}|opt_try(Bs0)]
+            reduce_try(Bs0, [{L, Blk0} | Acc])
     end;
-opt_try([{L,Blk}|Bs]) ->
-    [{L,Blk}|opt_try(Bs)];
-opt_try([]) -> [].
+reduce_try([{L, Blk} | Bs], Acc) ->
+    reduce_try(Bs, [{L, Blk} | Acc]);
+reduce_try([], Acc) ->
+    Acc.
 
-do_opt_try([{L,Blk}|Bs]=Bs0, Ws0) ->
-    case cerl_sets:is_element(L, Ws0) of
+do_reduce_try([{L, Blk} | Bs]=Bs0, Ws0) ->
+    case sets:is_element(L, Ws0) of
         false ->
             %% This block is not reachable from the block with the
             %% `new_try_tag` instruction. Retain it. There is no
             %% need to check it for safety.
-            case cerl_sets:size(Ws0) of
+            case sets:size(Ws0) of
                 0 -> Bs0;
-                _ -> [{L,Blk}|do_opt_try(Bs, Ws0)]
+                _ -> [{L, Blk} | do_reduce_try(Bs, Ws0)]
             end;
         true ->
-            Ws1 = cerl_sets:del_element(L, Ws0),
+            Ws1 = sets:del_element(L, Ws0),
             #b_blk{is=Is0} = Blk,
-            case is_safe_without_try(Is0, []) of
+            case reduce_try_is(Is0, []) of
                 {safe,Is} ->
                     %% This block does not execute any instructions
                     %% that would require a try. Analyze successors.
                     Successors = beam_ssa:successors(Blk),
-                    Ws = cerl_sets:union(cerl_sets:from_list(Successors),
+                    Ws = sets:union(sets:from_list(Successors, [{version, 2}]),
                                          Ws1),
-                    [{L,Blk#b_blk{is=Is}}|do_opt_try(Bs, Ws)];
+                    [{L, Blk#b_blk{is=Is}} | do_reduce_try(Bs, Ws)];
                 unsafe ->
                     %% There is something unsafe in the block, for
                     %% example a `call` instruction or an `extract`
@@ -1469,40 +1490,103 @@ do_opt_try([{L,Blk}|Bs]=Bs0, Ws0) ->
                     %% This block kills the try tag (either after successful
                     %% execution or at the landing pad). Don't analyze
                     %% successors.
-                    [{L,Blk#b_blk{is=Is}}|do_opt_try(Bs, Ws1)]
+                    [{L, Blk#b_blk{is=Is}} | do_reduce_try(Bs, Ws1)]
             end
     end;
-do_opt_try([], Ws) ->
-    0 = cerl_sets:size(Ws),                     %Assertion.
+do_reduce_try([], Ws) ->
+    0 = sets:size(Ws),                     %Assertion.
     [].
 
-is_safe_without_try([#b_set{op=kill_try_tag}|Is], Acc) ->
+reduce_try_is([#b_set{op=kill_try_tag}|Is], Acc) ->
     %% Remove this kill_try_tag instruction. If there was a landingpad
     %% instruction in this block, it has already been removed. Preserve
     %% all other instructions in the block.
     {done,reverse(Acc, Is)};
-is_safe_without_try([#b_set{op=extract}|_], _Acc) ->
+reduce_try_is([#b_set{op=extract}|_], _Acc) ->
     %% The error reason is accessed.
     unsafe;
-is_safe_without_try([#b_set{op=landingpad}|Is], Acc) ->
-    is_safe_without_try(Is, Acc);
-is_safe_without_try([#b_set{op={succeeded,body}}=I0|Is], Acc) ->
+reduce_try_is([#b_set{op=landingpad}|Is], Acc) ->
+    reduce_try_is(Is, Acc);
+reduce_try_is([#b_set{op={succeeded,body}}=I0|Is], Acc) ->
     %% If we reached this point, it means that the previous instruction
     %% has no side effects. We must now convert the flavor of the
     %% succeeded to the `guard`, since the try/catch will be removed.
     I = I0#b_set{op={succeeded,guard}},
-    is_safe_without_try(Is, [I|Acc]);
-is_safe_without_try([#b_set{op=Op}=I|Is], Acc) ->
+    reduce_try_is(Is, [I|Acc]);
+reduce_try_is([#b_set{op=Op}=I|Is], Acc) ->
     IsSafe = case Op of
                  phi -> true;
                  _ -> beam_ssa:no_side_effect(I)
              end,
     case IsSafe of
-        true -> is_safe_without_try(Is, [I|Acc]);
+        true -> reduce_try_is(Is, [I|Acc]);
         false -> unsafe
     end;
-is_safe_without_try([], Acc) ->
+reduce_try_is([], Acc) ->
     {safe,reverse(Acc)}.
+
+%% Removes try/catch expressions whose expressions will never throw.
+%%
+%% We walk backwards through all blocks, maintaining a set of potentially
+%% unreachable landing pads, removing them from the set whenever we see a
+%% branch to that block. When we encounter a `new_try_tag` instruction that
+%% references a block in the unreachable set, we'll remove the try/catch.
+trim_try([{L, #b_blk{is=[#b_set{op=new_try_tag,dst=Tag}],
+                     last=Last0}=Blk0} | Bs],
+         Unreachable0, Killed0, Acc) ->
+    #b_br{succ=SuccLbl,fail=PadLbl} = Last0,
+    case sets:is_element(PadLbl, Unreachable0) of
+        true ->
+            %% The landing pad can't be reached in any way, remove the entire
+            %% try/catch.
+            Blk = Blk0#b_blk{is=[],
+                             last=#b_br{bool=#b_literal{val=true},
+                                        succ=SuccLbl,fail=SuccLbl}},
+
+            Unreachable = sets:del_element(PadLbl, Unreachable0),
+            Killed = sets:add_element(Tag, Killed0),
+            trim_try(Bs, Unreachable, Killed, [{L, Blk} | Acc]);
+        false ->
+            trim_try(Bs, Unreachable0, Killed0, [{L, Blk0} | Acc])
+    end;
+trim_try([{L, #b_blk{is=[#b_set{op=landingpad} | _]}=Blk}| Bs],
+         Unreachable0, Killed, Acc) ->
+    Unreachable1 = sets:add_element(L, Unreachable0),
+
+    Successors = sets:from_list(beam_ssa:successors(Blk)),
+    Unreachable = sets:subtract(Unreachable1, Successors),
+    trim_try(Bs, Unreachable, Killed, [{L, Blk} | Acc]);
+trim_try([{L, Blk} | Bs], Unreachable0, Killed, Acc) ->
+    Successors = sets:from_list(beam_ssa:successors(Blk)),
+    Unreachable = sets:subtract(Unreachable0, Successors),
+    trim_try(Bs, Unreachable, Killed, [{L, Blk} | Acc]);
+trim_try([], _Unreachable, Killed, Acc0) ->
+    case sets:size(Killed) of
+        0 ->
+            Acc0;
+        _ ->
+            %% Remove all `kill_try_tag` instructions referencing removed
+            %% try/catches.
+            [{L, Blk#b_blk{is=trim_try_is(Is0, Killed)}} ||
+                {L, #b_blk{is=Is0}=Blk} <- Acc0]
+    end.
+
+trim_try_is([#b_set{op=phi,dst=CatchEndVal}=Phi,
+             #b_set{op=catch_end,dst=Dst,args=[Tag,CatchEndVal]}=Catch | Is],
+            Killed) ->
+    case sets:is_element(Tag, Killed) of
+        true -> [Phi#b_set{dst=Dst} | trim_try_is(Is, Killed)];
+        false -> [Phi, Catch | trim_try_is(Is, Killed)]
+    end;
+trim_try_is([#b_set{op=kill_try_tag,args=[Tag]}=I | Is], Killed) ->
+    case sets:is_element(Tag, Killed) of
+        true -> trim_try_is(Is, Killed);
+        false -> [I | trim_try_is(Is, Killed)]
+    end;
+trim_try_is([I | Is], Killed) ->
+    [I | trim_try_is(Is, Killed)];
+trim_try_is([], _Killed) ->
+    [].
 
 %%%
 %%% Optimize binary matching.
@@ -1516,7 +1600,7 @@ is_safe_without_try([], Acc) ->
 
 ssa_opt_bsm({#opt_st{ssa=Linear}=St, FuncDb}) ->
     Extracted0 = bsm_extracted(Linear),
-    Extracted = cerl_sets:from_list(Extracted0),
+    Extracted = sets:from_list(Extracted0, [{version, 2}]),
     {St#opt_st{ssa=bsm_skip(Linear, Extracted)}, FuncDb}.
 
 bsm_skip([{L,#b_blk{is=Is0}=Blk}|Bs0], Extracted) ->
@@ -1530,8 +1614,10 @@ bsm_skip_is([I0|Is], Extracted) ->
         #b_set{op=bs_match,
                dst=Ctx,
                args=[#b_literal{val=T}=Type,PrevCtx|Args0]}
-          when T =/= string, T =/= skip ->
-            I = case cerl_sets:is_element(Ctx, Extracted) of
+          when T =/= float, T =/= string, T =/= skip ->
+            %% Note that it is never safe to skip matching
+            %% of floats, even if the size is known to be correct.
+            I = case sets:is_element(Ctx, Extracted) of
                     true ->
                         I0;
                     false ->
@@ -2021,107 +2107,6 @@ opt_sw([{L,#b_blk{}=Blk}|Bs], Count, Acc) ->
 opt_sw([], Count, Acc) ->
     {reverse(Acc),Count}.
 
-%%%
-%%% Replace `wait_timeout infinity` with `wait`, but only when safe to
-%%% do so.
-%%%
-%%% Consider this code:
-%%%
-%%%     0:
-%%%       @tag = new_try_tag `'try'`
-%%%       br @tag, ^2, ^99
-%%%
-%%%     2:
-%%%          .
-%%%          .
-%%%          .
-%%%       br ^50
-%%%
-%%%     50:
-%%%        @wait_bool = wait_timeout `infinity`
-%%%        @succ_bool = succeeded @bool
-%%%        br @succ_bool ^51, ^99
-%%%
-%%%     51:
-%%%        br @wait_bool ^75, ^50
-%%%
-%%%     75:
-%%%        timeout
-%%%        kill_try_tag @tag
-%%%        ret `ok`
-%%%
-%%%     99:
-%%%        @ssa_agg = landingpad `'try'`, @tag
-%%%        @ssa_ignored = kill_try_tag @tag
-%%%        ret `error`
-%%%
-%%%
-%%% The liveness range of @tag will be from block 0 to block 99.
-%%% That will ensure that the Y register reserved for @tag can't
-%%% be reused or killed inside the try/block.
-%%%
-%%% It would not be safe (in general) to replace the `wait_timeout`
-%%% instruction with `wait` in this code. That is, the following
-%%% code is potentially UNSAFE (depending on the exact code in
-%%% block 2):
-%%%
-%%%     0:
-%%%       @tag = new_try_tag `'try'`
-%%%       br @tag, ^2, ^99
-%%%
-%%%     2:
-%%%          .
-%%%          .
-%%%          .
-%%%       br ^50
-%%%
-%%%     50:
-%%%        wait
-%%%        br ^50
-%%%
-%%%     99:
-%%%        @ssa_agg = landingpad `'try'`, @tag
-%%%        @ssa_ignored = kill_try_tag @tag
-%%%        ret `error`
-%%%
-%%% The try tag variable @tag will not be live in block 2 and 50
-%%% (because from those blocks, there is no way to reach an
-%%% instruction that uses @tag). Because @tag is not live, the
-%%% register allocator could reuse the register for @tag, or the
-%%% code generator could kill the register that holds @tag.
-%%%
-
-ssa_opt_receive_after({#opt_st{ssa=Linear}=St, FuncDb}) ->
-    {St#opt_st{ssa=recv_after_opt(Linear)}, FuncDb}.
-
-recv_after_opt([{L1,#b_blk{is=Is0,last=#b_br{bool=#b_var{},
-                                             succ=L2,
-                                             fail=?EXCEPTION_BLOCK}}=Blk1},
-                {L2,#b_blk{is=[],last=#b_br{bool=#b_var{}=WaitBool,
-                                            fail=Fail}=Br0}=Blk2}|Bs]) ->
-    case recv_after_opt_is(Is0, WaitBool, []) of
-        {yes,Is} ->
-            Br = Br0#b_br{bool=#b_literal{val=true},succ=Fail,fail=Fail},
-            [{L1,Blk1#b_blk{is=Is,last=Br}}|recv_after_opt(Bs)];
-        no ->
-            [{L1,Blk1},{L2,Blk2}|recv_after_opt(Bs)]
-    end;
-recv_after_opt([B|Bs]) ->
-    [B|recv_after_opt(Bs)];
-recv_after_opt([]) -> [].
-
-recv_after_opt_is([#b_set{op=wait_timeout,
-                          args=[#b_literal{val=infinity}],
-                          dst=WaitBool}=I0,
-                   #b_set{op={succeeded,body},
-                          args=[WaitBool]}],
-                  WaitBool, Acc) ->
-    I = I0#b_set{op=wait,args=[]},
-    {yes,reverse(Acc, [I])};
-recv_after_opt_is([I|Is], WaitBool, Acc) ->
-    recv_after_opt_is(Is, WaitBool, [I|Acc]);
-recv_after_opt_is([], _WaitBool, _Acc) -> no.
-
 %%% Try to replace `=/=` with `=:=` and `/=` with `==`. For example,
 %%% this code:
 %%%
@@ -2179,7 +2164,9 @@ replace_last([_], Repl) -> [Repl];
 replace_last([I|Is], Repl) -> [I|replace_last(Is, Repl)].
 
 opt_ne_single_use(Var, {uses,Linear}) ->
-    Uses = beam_ssa:uses(maps:from_list(Linear)),
+    Blocks = maps:from_list(Linear),
+    RPO = beam_ssa:rpo(Blocks),
+    Uses = beam_ssa:uses(RPO, Blocks),
     opt_ne_single_use(Var, Uses);
 opt_ne_single_use(Var, Uses) when is_map(Uses) ->
     {case Uses of
@@ -2267,7 +2254,9 @@ do_ssa_opt_sink(Defs, #opt_st{ssa=Linear}=St) ->
 
     %% Calculate dominators.
     Blocks0 = maps:from_list(Linear),
-    {Dom,Numbering} = beam_ssa:dominators(Blocks0),
+    RPO = beam_ssa:rpo(Blocks0),
+    Preds = beam_ssa:predecessors(Blocks0),
+    {Dom, Numbering} = beam_ssa:dominators_from_predecessors(RPO, Preds),
 
     %% It is not safe to move get_tuple_element instructions to blocks
     %% that begin with certain instructions. It is also unsafe to move
@@ -2283,7 +2272,7 @@ do_ssa_opt_sink(Defs, #opt_st{ssa=Linear}=St) ->
     %% important precaution to avoid that lists:mapfoldl/3 keeps all previous
     %% versions of the accumulator alive until the end of the input list.
     Ps = partition_deflocs(DefLocs0, Defs, Blocks0),
-    DefLocs1 = filter_deflocs(Ps, Blocks0),
+    DefLocs1 = filter_deflocs(Ps, Preds, Blocks0),
     DefLocs = sort(DefLocs1),
 
     %% Now move all suitable get_tuple_element instructions to their
@@ -2345,13 +2334,13 @@ partition_dl_1([], _, Acc) ->
 partition_dl_1([_|_]=DLs, [], Acc) ->
     {reverse(Acc),DLs}.
 
-filter_deflocs([{Tuple,DefLoc0}|DLs], Blocks) ->
+filter_deflocs([{Tuple,DefLoc0}|DLs], Preds, Blocks) ->
     %% Input is a list of sinks of get_tuple_element instructions in
     %% execution order from the same tuple in the same clause.
     [{_,{_,First}}|_] = DefLoc0,
     Paths = find_paths_to_check(DefLoc0, First),
     WillGC0 = ordsets:from_list([FromTo || {{_,_}=FromTo,_} <- Paths]),
-    WillGC1 = [{{From,To},will_gc(From, To, Blocks, true)} ||
+    WillGC1 = [{{From,To},will_gc(From, To, Preds, Blocks, true)} ||
                   {From,To} <- WillGC0],
     WillGC = maps:from_list(WillGC1),
 
@@ -2363,17 +2352,17 @@ filter_deflocs([{Tuple,DefLoc0}|DLs], Blocks) ->
                   end, Paths),
 
     %% Avoid potentially harmful sinks.
-    DefLocGC = filter_gc_deflocs(DefLocGC0, Tuple, First, Blocks),
+    DefLocGC = filter_gc_deflocs(DefLocGC0, Tuple, First, Preds, Blocks),
 
     %% Construct the complete list of sink operations.
     DefLoc1 = DefLocGC ++ DefLocNoGC,
     [DL || {_,{_,{From,To}}=DL} <- DefLoc1, From =/= To] ++
-        filter_deflocs(DLs, Blocks);
-filter_deflocs([], _) -> [].
+        filter_deflocs(DLs, Preds, Blocks);
+filter_deflocs([], _, _) -> [].
 
 %% Use an heuristic to avoid harmful sinking in lists:mapfold/3 and
 %% similar functions.
-filter_gc_deflocs(DefLocGC, Tuple, First, Blocks) ->
+filter_gc_deflocs(DefLocGC, Tuple, First, Preds, Blocks) ->
     case DefLocGC of
         [] ->
             [];
@@ -2389,7 +2378,7 @@ filter_gc_deflocs(DefLocGC, Tuple, First, Blocks) ->
                     %% probably a win to sink this instruction.
                     DefLocGC;
                 false ->
-                    case will_gc(From, To, Blocks, false) of
+                    case will_gc(From, To, Preds, Blocks, false) of
                         false ->
                             %% There is no risk for recursive calls,
                             %% so it should be safe to
@@ -2419,16 +2408,17 @@ find_paths_to_check([{_,{_,To}}=Move|T], First) ->
     [{{First,To},Move}|find_paths_to_check(T, First)];
 find_paths_to_check([], _First) -> [].
 
-will_gc(From, To, Blocks, All) ->
-    will_gc(beam_ssa:rpo([From], Blocks), To, Blocks, All, #{From => false}).
+will_gc(From, To, Preds, Blocks, All) ->
+    Between = beam_ssa:between(From, To, Preds, Blocks),
+    will_gc_1(Between, To, Blocks, All, #{From => false}).
 
-will_gc([To|_], To, _Blocks, _All, WillGC) ->
+will_gc_1([To|_], To, _Blocks, _All, WillGC) ->
     map_get(To, WillGC);
-will_gc([L|Ls], To, Blocks, All, WillGC0) ->
+will_gc_1([L|Ls], To, Blocks, All, WillGC0) ->
     #b_blk{is=Is} = Blk = map_get(L, Blocks),
     GC = map_get(L, WillGC0) orelse will_gc_is(Is, All),
     WillGC = gc_update_successors(Blk, GC, WillGC0),
-    will_gc(Ls, To, Blocks, All, WillGC).
+    will_gc_1(Ls, To, Blocks, All, WillGC).
 
 will_gc_is([#b_set{op=call,args=Args}|Is], false) ->
     case Args of
@@ -2634,7 +2624,7 @@ insert_def_is([#b_set{op=Op}=I|Is]=Is0, V, Def) ->
     Action0 = case Op of
                   call -> beyond;
                   'catch_end' -> beyond;
-                  timeout -> beyond;
+                  wait_timeout -> beyond;
                   _ -> here
               end,
     Action = case Is of
@@ -2837,11 +2827,11 @@ unfold_lit_is([#b_set{op=call,
     end;
 unfold_lit_is([#b_set{op=Op,args=Args0}=I0|Is], LitMap, Count, Acc) ->
     %% Using a register instead of a literal is a clear win only for
-    %% `call` and `make_fun` instructions. Substituting into other
+    %% `call` and `old_make_fun` instructions. Substituting into other
     %% instructions is unlikely to be an improvement.
     Unfold = case Op of
                  call -> true;
-                 make_fun -> true;
+                 old_make_fun -> true;
                  _ -> false
              end,
     I = case Unfold of

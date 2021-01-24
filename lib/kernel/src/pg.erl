@@ -285,9 +285,9 @@ handle_info({leave, Peer, PidOrPids, Groups}, #state{scope = Scope, nodes = Node
                 fun (Group, Acc) ->
                     case maps:get(Group, Acc) of
                         PidOrPids ->
-                            Acc;
+                            maps:remove(Group, Acc);
                         [PidOrPids] ->
-                            Acc;
+                            maps:remove(Group, Acc);
                         Existing when is_pid(PidOrPids) ->
                             Acc#{Group => lists:delete(PidOrPids, Existing)};
                         Existing ->
@@ -342,6 +342,8 @@ handle_info({nodedown, _Node}, State) ->
     {noreply, State};
 
 %% nodeup: discover if remote node participates in the overlay network
+handle_info({nodeup, Node}, State) when Node =:= node() ->
+    {noreply, State};
 handle_info({nodeup, Node}, #state{scope = Scope} = State) ->
     {Scope, Node} ! {discover, self()},
     {noreply, State};

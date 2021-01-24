@@ -119,6 +119,16 @@
 # endif
 #endif
 
+#if defined(HAS_EVP_PKEY_CTX) \
+    && OPENSSL_VERSION_NUMBER < PACKED_OPENSSL_VERSION_PLAIN(1,1,0)
+     /* EVP is slow on antique crypto libs.
+      * DISABLE_EVP_* is 0 or 1 from the configure script
+      */
+# undef  DISABLE_EVP_DH
+# define DISABLE_EVP_DH 1
+# undef  DISABLE_EVP_HMAC
+# define DISABLE_EVP_HMAC 1
+#endif
 
 #if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION_PLAIN(1,0,0)
 #include <openssl/modes.h>
@@ -227,10 +237,6 @@
 # if OPENSSL_VERSION_NUMBER >= (PACKED_OPENSSL_VERSION_PLAIN(1,1,1))
 #   define HAVE_EDDSA
 # endif
-#endif
-
-#if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION(0,9,8,'c')
-# define HAVE_AES_IGE
 #endif
 
 #if OPENSSL_VERSION_NUMBER >= PACKED_OPENSSL_VERSION_PLAIN(1,0,1)

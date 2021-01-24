@@ -35,7 +35,7 @@
 
 -export([seq/3, seq_r/3]).
 -export([loaded/1, a_function/1, a_called_function/1, dec/1, nif_dec/1, dead_tracer/1,
-        return_stop/1]).
+        return_stop/1,catch_crash/1]).
 
 -define(US_ERROR, 10000).
 -define(R_ERROR, 0.8).
@@ -91,7 +91,8 @@ all() ->
 	false ->
 	    [basic, on_and_off, info, pause_and_restart, scheduling,
              disable_ongoing,
-	     combo, bif, nif, called_function, dead_tracer, return_stop]
+	     combo, bif, nif, called_function, dead_tracer, return_stop,
+             catch_crash]
     end.
 
 not_run(Config) when is_list(Config) ->
@@ -267,7 +268,7 @@ scheduling(Config) when is_list(Config) ->
     %% setup load processes
     %% (single, no internal calls)
 
-    erlang:trace_pattern({?MODULE,loaded,1}, true, [call_time]),
+    erlang:trace_pattern({?MODULE,loaded,2}, true, [call_time]),
 
     Pids     = [setup() || _ <- lists:seq(1, F*Np)],
     {_Ls,T1} = execute(Pids, {?MODULE,loaded,[M]}),
@@ -275,7 +276,7 @@ scheduling(Config) when is_list(Config) ->
 
     %% logic dictates that each process will get ~ 1/F of the schedulers time
 
-    {call_time, CT} = erlang:trace_info({?MODULE,loaded,1}, call_time),
+    {call_time, CT} = erlang:trace_info({?MODULE,loaded,2}, call_time),
 
     lists:foreach(fun (Pid) ->
                           ok = case check_process_time(lists:keysearch(Pid, 1, CT), M, F, T1) of
@@ -468,14 +469,17 @@ called_function(Config) when is_list(Config) ->
 
     1 = erlang:trace_pattern({?MODULE,a_called_function,'_'}, true, [call_time]),
     {L, T2} = execute(Pid, {?MODULE, a_function, [M]}),
-    ok = check_trace_info({?MODULE, a_function, 1}, [{Pid, M+M, 0, 0}], T1 + M*?SINGLE_CALL_US_TIME),
+    ok = check_trace_info({?MODULE, a_function, 1}, [{Pid, M+M, 0, 0}],
+                          T1 + M*?SINGLE_CALL_US_TIME),
     ok = check_trace_info({?MODULE, a_called_function, 1}, [{Pid, M, 0, 0}], T2),
 
 
     1 = erlang:trace_pattern({?MODULE,dec,'_'}, true, [call_time]),
     {L, T3} = execute(Pid, {?MODULE, a_function, [M]}),
-    ok = check_trace_info({?MODULE, a_function, 1}, [{Pid, M+M+M, 0, 0}], T1 + (M+M)*?SINGLE_CALL_US_TIME),
-    ok = check_trace_info({?MODULE, a_called_function, 1}, [{Pid, M+M, 0, 0}], T2 + M*?SINGLE_CALL_US_TIME ),
+    ok = check_trace_info({?MODULE, a_function, 1}, [{Pid, M+M+M, 0, 0}],
+                          T1 + (M+M)*?SINGLE_CALL_US_TIME),
+    ok = check_trace_info({?MODULE, a_called_function, 1}, [{Pid, M+M, 0, 0}],
+                          T2 + M*?SINGLE_CALL_US_TIME ),
     ok = check_trace_info({?MODULE, dec, 1}, [{Pid, M, 0, 0}], T3),
 
     Pid ! quit,
@@ -634,6 +638,25 @@ spinner(N) ->
 quicky() ->
     done.
 
+%% OTP-16994: next_catch returned a bogus stack pointer when call_time tracing
+%% was enabled, crashing the emulator.
+catch_crash(_Config) ->
+    Fun = id(fun() -> catch_crash_1() end),
+
+    _ = erlang:trace_pattern({?MODULE,'_','_'}, true, [call_time]),
+    _ = erlang:trace(self(), true, [call]),
+
+    Res = (catch Fun()),
+
+    _ = erlang:trace_pattern({'_','_','_'}, false, [call_time]),
+    _ = erlang:trace(self(), false, [call]),
+
+    id(Res),
+
+    ok.
+
+catch_crash_1() ->
+    error(crash).
 
 %% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -672,8 +695,9 @@ dec(N) ->
     loaded(10000),
     N - 1.
 
-loaded(N) when N > 1 -> loaded(N - 1);
-loaded(_) -> 5.
+loaded(N) -> loaded(N, 1.0).
+loaded(N, M) when N > 1 -> loaded(N - 1, M * 1.0001);
+loaded(_, M) -> M.
 
 
 %% Tail recursive seq, result list is reversed

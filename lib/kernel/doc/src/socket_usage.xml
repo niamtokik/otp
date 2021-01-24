@@ -4,7 +4,7 @@
 <chapter>
   <header>
     <copyright>
-      <year>2018</year><year>2019</year>
+      <year>2018</year><year>2020</year>
       <holder>Ericsson AB. All Rights Reserved.</holder>
     </copyright>
     <legalnotice>
@@ -32,7 +32,7 @@
 
   <section>
     <title>Introduction</title>
-    <p>The socket interface (module) is basically an "thin" layer on top of
+    <p>The socket interface (module) is basically a "thin" layer on top of
     the OS socket interface. It is assumed that, unless you have special needs,
     gen_[tcp|udp|sctp] should be sufficent (when they become available). </p>
     <p>Note that just because we have a documented and described option,
@@ -42,30 +42,30 @@
     <section>
       <title>Asynchronous calls</title>
       <p>Some functions allow for an <i>asynchronous</i> call
-      (<seeerl marker="socket#accept_async"><c>accept/2</c></seeerl>,
-      <seeerl marker="socket#connect_async"><c>connect/3</c></seeerl>,
-      <seeerl marker="socket#recv_async"><c>recv/3,4</c></seeerl>,
-      <seeerl marker="socket#recvfrom_async"><c>recvfrom/3,4</c></seeerl>,
-      <seeerl marker="socket#recvmsg_async"><c>recvmsg/2,3,5</c></seeerl>,
-      <seeerl marker="socket#send_async"><c>send/3,4</c></seeerl>,
-      <seeerl marker="socket#sendmsg_async"><c>sendmsg/3,4</c></seeerl> and
-      <seeerl marker="socket#sendto_async"><c>sendto/4,5</c></seeerl>).
+      (<seeerl marker="socket#accept-nowait"><c>accept/2</c></seeerl>,
+      <seeerl marker="socket#connect-nowait"><c>connect/3</c></seeerl>,
+      <seeerl marker="socket#recv-nowait"><c>recv/3,4</c></seeerl>,
+      <seeerl marker="socket#recvfrom-nowait"><c>recvfrom/3,4</c></seeerl>,
+      <seeerl marker="socket#recvmsg-nowait"><c>recvmsg/2,3,5</c></seeerl>,
+      <seeerl marker="socket#send-nowait"><c>send/3,4</c></seeerl>,
+      <seeerl marker="socket#sendmsg-nowait"><c>sendmsg/3,4</c></seeerl> and
+      <seeerl marker="socket#sendto-nowait"><c>sendto/4,5</c></seeerl>).
       This is achieved by setting the <c>Timeout</c> argument to
       <c>nowait</c>. For instance, if calling the
-      <seeerl marker="socket#recv_async"><c>recv/3</c></seeerl>
+      <seeerl marker="socket#recv-nowait"><c>recv/3</c></seeerl>
       function with Timeout set to <c>nowait</c> (i.e. 
       <c>recv(Sock, 0, nowait)</c>)
       when there is actually nothing to read, it will return with
       <c>{select, </c>
       <seetype marker="socket#select_info"><c>SelectInfo</c></seetype><c>}</c>
       (<c>SelectInfo</c> contains the
-      <seetype marker="socket#select_ref">SelectRef</seetype>).
+      <seetype marker="socket#select_handle"><c>SelectHandle</c></seetype>).
       When data eventually arrives a 'select message'
       will be sent to the caller:</p>
       <taglist>
 	<!-- NOTE THAT THE EMPTY TAG IS INTENTIONAL -->
 	<tag></tag>
-	<item><c>{'$socket', socket(), select, SelectRef}</c></item>
+	<item><c>{'$socket', socket(), select, SelectHandle}</c></item>
       </taglist>
       <p>The caller can then make another
       call to the recv function and now expect data.</p>
@@ -82,7 +82,7 @@
       <p>If the operation is aborted
       for whatever reason (e.g. if the socket is closed "by someone else").
       The <c>Info</c> part contains the abort reason (in this case that
-      the socket has been closed <c>Info = {SelectRef, closed}</c>). </p>
+      the socket has been closed <c>Info = {SelectHandle, closed}</c>). </p>
 
       <p>The general form of the 'socket' message is: </p>
       <taglist>
@@ -98,17 +98,51 @@
 	</row>
 	<row>
 	  <cell>select</cell>
-	  <cell>select_ref()</cell>
+	  <cell>select_handle()</cell>
 	</row>
 	<row>
 	  <cell>abort</cell>
-	  <cell>{select_ref(), Reason :: term()}</cell>
+	  <cell>{select_handle(), Reason :: term()}</cell>
 	</row>
 	<tcaption>socket message info value type</tcaption>
       </table>
-      <p>The <c>select_ref()</c> is the same as was received in the
+      <p>The <c>select_handle()</c> is the same as was returned in the
       <seetype marker="socket#select_info"><c>SelectInfo</c></seetype>. </p>
     </section>
+  </section>
+
+  <section>
+    <title>Socket Registry</title>
+    <p>The <em>socket registry</em> is how we keep track of sockets.
+    There are two functions that can be used for interaction:
+    <seemfa marker="socket#number_of/0"><c>socket:number_of/0</c></seemfa>
+    and
+    <seemfa marker="socket#which_sockets/1"><c>socket:which_sockets/1</c></seemfa>.
+    </p>
+    <p>In systems which create and delete <em>many</em> sockets
+    dynamically, it (the socket registry) could become a bottleneck.
+    For such systems, there are a couple of
+    ways to control the use of the socket registry. </p>
+
+    <p>Firstly, its possible to effect the global default value when
+    building OTP from source with the two configure options:</p>
+    <code type="none">--enable-esock-socket-registry (default) | --disable-esock-socket-registry</code>
+
+    <p>Second, its possible to effect the global default value by
+    setting the environment variable <c>ESOCK_USE_SOCKET_REGISTRY</c>
+    (boolean) before starting the erlang. </p>
+
+    <p>Third, its possible to alter the global default value in runtime
+    by calling the function
+    <seemfa marker="socket#use_registry/1"><c>use_registry/1</c></seemfa>.</p>
+
+    <p>And finally, its possible to override the global default when creating
+    a socket (with <seemfa marker="socket#open/2"><c>open/2</c></seemfa> and
+    <seemfa marker="socket#open/4"><c>open/4</c></seemfa>) by providing
+    the attribute <c>use_registry</c> (boolean) in the their <c>Opts</c>
+    argument (which effects <em>that</em> specific
+    socket).</p>
+
   </section>
 
   <section>
@@ -180,6 +214,15 @@
 	<cell>no</cell>
 	<cell>yes</cell>
 	<cell>none</cell>
+      </row>
+      <row>
+	<cell>use_registry</cell>
+	<cell>boolean()</cell>
+	<cell>no</cell>
+	<cell>yes</cell>
+	<cell>the value is set when the socket is created, by a call to
+	<seemfa marker="socket#open/2"><c>open/2</c></seemfa> or
+	<seemfa marker="socket#open/4"><c>open/4</c></seemfa>.</cell>
       </row>
       <tcaption>option levels</tcaption>
     </table>

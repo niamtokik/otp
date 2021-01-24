@@ -23,11 +23,24 @@
 -module(ssh_chan_behaviours_SUITE).
 
 -include_lib("common_test/include/ct.hrl").
--include_lib("ssh/src/ssh.hrl").
+-include("ssh.hrl").
 -include("ssh_test_lib.hrl").
 
-%% Note: This directive should only be used in test suites.
--compile(export_all).
+-export([
+         suite/0,
+         all/0,
+         init_per_suite/1,
+         end_per_suite/1,
+         init_per_testcase/2,
+         end_per_testcase/2
+        ]).
+
+-export([
+         defined_subsystem/1,
+         noexist_subsystem/1,
+         subsystem_client/1,
+         undefined_subsystem/1
+        ]).
 
 %%--------------------------------------------------------------------
 %% Common Test interface functions -----------------------------------
@@ -72,7 +85,7 @@ end_per_testcase(_TC, Config) ->
     ct:log("Stop daemon: ~p ms",[(100*(Time div 1000)) / 100]),
     case flush() of
         [] -> ok;
-        Msgs -> ct:pal("Unhandled messages:~n~p", [Msgs])
+        Msgs -> ct:log("Unhandled messages:~n~p", [Msgs])
     end.
     
 

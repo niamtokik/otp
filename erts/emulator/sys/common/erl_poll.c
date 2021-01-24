@@ -374,6 +374,7 @@ uint32_t epoll_events(int kp_fd, int fd);
 #define ERTS_POLL_NOT_WOKEN	0
 #define ERTS_POLL_WOKEN		-1
 #define ERTS_POLL_WOKEN_INTR	1
+#define ERTS_POLL_WSTATE_UNUSED ~0
 
 static ERTS_INLINE void
 reset_wakeup_state(ErtsPollSet *ps)
@@ -384,12 +385,16 @@ reset_wakeup_state(ErtsPollSet *ps)
 static ERTS_INLINE int
 is_woken(ErtsPollSet *ps)
 {
+    if (!ERTS_POLL_USE_WAKEUP(ps))
+        return 0;
     return erts_atomic32_read_acqb(&ps->wakeup_state) != ERTS_POLL_NOT_WOKEN;
 }
 
 static ERTS_INLINE int
 is_interrupted_reset(ErtsPollSet *ps)
 {
+    if (!ERTS_POLL_USE_WAKEUP(ps))
+        return 0;
     return (erts_atomic32_xchg_acqb(&ps->wakeup_state, ERTS_POLL_NOT_WOKEN)
 	    == ERTS_POLL_WOKEN_INTR);
 }
@@ -397,7 +402,10 @@ is_interrupted_reset(ErtsPollSet *ps)
 static ERTS_INLINE void
 woke_up(ErtsPollSet *ps)
 {
-    erts_aint32_t wakeup_state = erts_atomic32_read_acqb(&ps->wakeup_state);
+    erts_aint32_t wakeup_state;
+    if (!ERTS_POLL_USE_WAKEUP(ps))
+        return;
+    wakeup_state = erts_atomic32_read_acqb(&ps->wakeup_state);
     if (wakeup_state == ERTS_POLL_NOT_WOKEN)
 	(void) erts_atomic32_cmpxchg_nob(&ps->wakeup_state,
 					 ERTS_POLL_WOKEN,
@@ -450,6 +458,7 @@ cleanup_wakeup_pipe(ErtsPollSet *ps)
     int intr = 0;
     int fd = ps->wake_fds[0];
     int res;
+    ASSERT(ERTS_POLL_USE_WAKEUP(ps));
     do {
 	char buf[32];
 	res = read(fd, buf, sizeof(buf));
@@ -475,6 +484,13 @@ create_wakeup_pipe(ErtsPollSet *ps)
     int wake_fds[2];
     ps->wake_fds[0] = -1;
     ps->wake_fds[1] = -1;
+    if (!ERTS_POLL_USE_WAKEUP(ps)) {
+        erts_atomic32_init_nob(&ps->wakeup_state,
+                               (erts_aint32_t) ERTS_POLL_WSTATE_UNUSED);
+        return;
+    }
+    erts_atomic32_init_nob(&ps->wakeup_state,
+                           (erts_aint32_t) ERTS_POLL_NOT_WOKEN);
     if (pipe(wake_fds) < 0) {
 	fatal_error("%s:%d:create_wakeup_pipe(): "
 		    "Failed to create pipe: %s (%d)\n",
@@ -483,6 +499,7 @@ create_wakeup_pipe(ErtsPollSet *ps)
 		    erl_errno_id(errno),
 		    errno);
     }
+
     SET_NONBLOCKING(wake_fds[0]);
     SET_NONBLOCKING(wake_fds[1]);
 
@@ -629,12 +646,13 @@ int erts_poll_new_table_len(int old_len, int need_len)
     }
     else {
         new_len = old_len;
+        if (new_len < ERTS_FD_TABLE_MIN_LENGTH)
+            new_len = ERTS_FD_TABLE_MIN_LENGTH;
         do {
             if (new_len < ERTS_FD_TABLE_EXP_THRESHOLD)
                 new_len *= 2;
             else
                 new_len += ERTS_FD_TABLE_EXP_THRESHOLD;
-
         } while (new_len < need_len);
     }
     ASSERT(new_len >= need_len);
@@ -1955,8 +1973,7 @@ ERTS_POLL_EXPORT(erts_poll_wait)(ErtsPollSet *ps,
         ERTS_MSACC_SET_STATE_CACHED(ERTS_MSACC_STATE_CHECK_IO);
     }
 
-    if (ERTS_POLL_USE_WAKEUP(ps))
-        woke_up(ps);
+    woke_up(ps);
 
     if (res < 0) {
 #if ERTS_POLL_USE_SELECT
@@ -2046,6 +2063,21 @@ ERTS_POLL_EXPORT(erts_poll_init)(int *concurrent_updates)
     max_fds = OPEN_MAX;
 #endif
 
+    if (max_fds < 0 && errno == 0) {
+        /* On macOS 11 and higher, it possible to have an unlimited
+         * number of open files per process.  ERTS will need an actual
+         * limit, though, so we will set it to a largish value.  The
+         * number below is the hard number of file descriptors per
+         * process as returned by `sysctl kern.maxfilesperproc`, which
+         * seems to be the limit in practice.
+         *
+         * Note: The size of the port table will be based on max_fds,
+         * so we don't want to set it to a huge value such as
+         * MAX_INT.
+         */
+        max_fds = 24576;
+    }
+
 #if ERTS_POLL_USE_SELECT && defined(FD_SETSIZE) && \
 	!defined(_DARWIN_UNLIMITED_SELECT)
     if (max_fds > FD_SETSIZE)
@@ -2134,7 +2166,6 @@ ERTS_POLL_EXPORT(erts_poll_create_pollset)(int id)
         ps->oneshot = 1;
 #endif
 
-    erts_atomic32_init_nob(&ps->wakeup_state, (erts_aint32_t) 0);
     create_wakeup_pipe(ps);
 
 #if ERTS_POLL_USE_TIMERFD

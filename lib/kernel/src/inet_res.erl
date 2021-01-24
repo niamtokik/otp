@@ -37,6 +37,10 @@
 -export([nslookup/3, nslookup/4]).
 -export([nnslookup/4, nnslookup/5]).
 
+-export_type([res_option/0,
+              res_error/0,
+              nameserver/0]).
+
 -include_lib("kernel/include/inet.hrl").
 -include("inet_res.hrl").
 -include("inet_dns.hrl").
@@ -66,9 +70,9 @@
 
 -type dns_name() :: string().
 
--type rr_type() :: a | aaaa | cname | gid | hinfo | ns | mb | md | mg | mf
-                 | minfo | mx | naptr | null | ptr | soa | spf | srv | txt
-                 | uid | uinfo | unspec | wks.
+-type rr_type() :: a | aaaa | caa | cname | gid | hinfo | ns | mb | md | mg
+                 | mf | minfo | mx | naptr | null | ptr | soa | spf | srv
+                 | txt | uid | uinfo | unspec | uri | wks.
 
 -type dns_class() :: in | chaos | hs | any.
 
@@ -259,7 +263,7 @@ do_nslookup(Name, Class, Type, Opts, Timeout) ->
 %%
 -record(options, { % These must be sorted!
 	  alt_nameservers,edns,inet6,nameservers,recurse,
-	  retry,timeout,udp_payload_size,usevc,
+	  retry,servfail_retry_timeout,timeout,udp_payload_size,usevc,
 	  verbose}). % this is a local option, not in inet_db
 %%
 %% Opts when is_list(Opts) -> #options{}
@@ -487,7 +491,7 @@ type_p(Type) ->
 		        ?S_MD, ?S_MF, ?S_CNAME, ?S_SOA,
 		        ?S_MB, ?S_MG, ?S_MR, ?S_NULL,
 		        ?S_WKS, ?S_HINFO, ?S_TXT, ?S_SRV, ?S_NAPTR, ?S_SPF,
-		        ?S_UINFO, ?S_UID, ?S_GID]).
+		        ?S_UINFO, ?S_UID, ?S_GID, ?S_URI, ?S_CAA]).
 
 
 
@@ -772,7 +776,17 @@ query_retries(_Q, _NSs, _Timer, Retry, Retry, S, Reason) ->
 query_retries(_Q, [], _Timer, _Retry, _I, S, Reason) ->
     query_retries_error(S, Reason);
 query_retries(Q, NSs, Timer, Retry, I, S_0, Reason) ->
+    servfail_retry_wait(Q, I),
     query_nss(Q, NSs, Timer, Retry, I, S_0, Reason, NSs).
+
+servfail_retry_wait(_Q, 0) ->
+    ok;
+servfail_retry_wait(#q{options = #options{servfail_retry_timeout = T}}, _)
+  when (T > 0) ->
+    receive after T -> ok end;
+servfail_retry_wait(_, _) ->
+    ok.
+
 
 %% Loop for all name servers, for each:
 %%     If EDNS is enabled, try that first,

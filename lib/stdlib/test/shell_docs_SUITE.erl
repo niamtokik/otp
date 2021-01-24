@@ -60,35 +60,48 @@ end_per_group(_GroupName, Config) ->
 render(_Config) ->
     docsmap(
       fun(Mod, #docs_v1{ docs = Docs } = D) ->
-              try
-                  shell_docs:render(Mod, D),
-                  shell_docs:render_type(Mod, D),
-                  shell_docs:render_callback(Mod, D),
-                  [try
-                       shell_docs:render(Mod, F, A, D)
-                   catch _E:R:ST ->
-                           io:format("Failed to render ~p:~p/~p~n~p:~p~n~p~n",
-                                     [Mod,F,A,R,ST,shell_docs:get_doc(Mod,F,A)]),
-                           erlang:raise(error,R,ST)
-                   end || {F,A} <- Mod:module_info(exports)],
-                  [try
-                       shell_docs:render_type(Mod, T, A, D)
-                   catch _E:R:ST ->
-                           io:format("Failed to render type ~p:~p/~p~n~p:~p~n~p~n",
-                                     [Mod,T,A,R,ST,shell_docs:get_type_doc(Mod,T,A)]),
-                           erlang:raise(error,R,ST)
-                   end || {{type,T,A},_,_,_,_} <- Docs],
-                  [try
-                       shell_docs:render_callback(Mod, T, A, D)
-                   catch _E:R:ST ->
-                           io:format("Failed to render callback ~p:~p/~p~n~p:~p~n~p~n",
-                                     [Mod,T,A,R,ST,shell_docs:get_callback_doc(Mod,T,A)]),
-                           erlang:raise(error,R,ST)
-                   end || {{callback,T,A},_,_,_,_} <- Docs]
-              catch throw:R:ST ->
-                      io:format("Failed to render ~p~n~p:~p~n",[Mod,R,ST]),
-                      exit(R)
-              end
+              lists:foreach(
+                fun(Config) ->
+                        try
+                            shell_docs:render(Mod, D, Config),
+                            shell_docs:render_type(Mod, D, Config),
+                            shell_docs:render_callback(Mod, D, Config),
+                            Exports = try Mod:module_info(exports)
+                                      catch _:undef -> []
+                                      end, %% nif file not available on this platform
+
+                            [try
+                                 shell_docs:render(Mod, F, A, D, Config)
+                             catch _E:R:ST ->
+                                     io:format("Failed to render ~p:~p/~p~n~p:~p~n~p~n",
+                                               [Mod,F,A,R,ST,shell_docs:get_doc(Mod,F,A)]),
+                                     erlang:raise(error,R,ST)
+                             end || {F,A} <- Exports],
+                            [try
+                                 shell_docs:render_type(Mod, T, A, D, Config)
+                             catch _E:R:ST ->
+                                     io:format("Failed to render type ~p:~p/~p~n~p:~p~n~p~n",
+                                               [Mod,T,A,R,ST,shell_docs:get_type_doc(Mod,T,A)]),
+                                     erlang:raise(error,R,ST)
+                             end || {{type,T,A},_,_,_,_} <- Docs],
+                            [try
+                                 shell_docs:render_callback(Mod, T, A, D, Config)
+                             catch _E:R:ST ->
+                                     io:format("Failed to render callback ~p:~p/~p~n~p:~p~n~p~n",
+                                               [Mod,T,A,R,ST,shell_docs:get_callback_doc(Mod,T,A)]),
+                                     erlang:raise(error,R,ST)
+                             end || {{callback,T,A},_,_,_,_} <- Docs]
+                        catch throw:R:ST ->
+                                io:format("Failed to render ~p~n~p:~p~n",[Mod,R,ST]),
+                                exit(R)
+                        end
+                end, [#{},
+                      #{ ansi => false },
+                      #{ ansi => true },
+                      #{ columns => 5 },
+                      #{ columns => 150 },
+                      #{ encoding => unicode},
+                      #{ encoding => latin1}])
       end),
     ok.
 
@@ -171,9 +184,25 @@ b2a(Bin) ->
 %% Testing functions
 render_all(Dir) ->
     file:make_dir(Dir),
+    %% We load all possible application in order to be able to use
+    %% application:get_application to get the application a module
+    %% belongs to.
+    PossibleApplications =
+        lists:flatmap(
+          fun(P) ->
+                  filelib:wildcard(filename:join(P, "*.app"))
+          end, code:get_path()),
+    [application:load(list_to_atom(filename:basename(filename:rootname(App)))) ||
+        App <- PossibleApplications],
     docsmap(
       fun(Mod, #docs_v1{ docs = Docs } = D) ->
-              SMod = atom_to_list(Mod),
+              case application:get_application(Mod) of
+                  {ok, App} ->
+                      App;
+                  _ ->
+                      App = unknown
+              end,
+              SMod = atom_to_list(App) ++ "_" ++ atom_to_list(Mod),
               file:write_file(filename:join(Dir,SMod ++ ".txt"),
                               unicode:characters_to_binary(shell_docs:render(Mod, D))),
               file:write_file(filename:join(Dir,SMod ++ "_type.txt"),
@@ -181,12 +210,14 @@ render_all(Dir) ->
               file:write_file(filename:join(Dir,SMod ++ "_cb.txt"),
                               unicode:characters_to_binary(shell_docs:render_callback(Mod, D))),
               lists:foreach(
-                fun({{function,Name,Arity},_Anno,_Sig,_Doc,_Meta}) ->
+                fun({_Type,_Anno,_Sig,none,_Meta}) ->
+                        ok;
+                   ({{function,Name,Arity},_Anno,_Sig,_Doc,_Meta}) ->
                         FName = SMod ++ "_"++atom_to_list(Name)++"_"++integer_to_list(Arity)++"_func.txt",
                         ok = file:write_file(filename:join(Dir,re:replace(FName,"[/:]","_",
                                                                           [global,{return,list}])),
                                              unicode:characters_to_binary(shell_docs:render(Mod, Name, Arity, D)));
-                    ({{type,Name,Arity},_Anno,_Sig,_Doc,_Meta}) ->
+                   ({{type,Name,Arity},_Anno,_Sig,_Doc,_Meta}) ->
                         FName = SMod ++ "_"++atom_to_list(Name)++"_"++integer_to_list(Arity)++"_type.txt",
                         ok = file:write_file(filename:join(Dir,re:replace(FName,"[/:]","_",
                                                                           [global,{return,list}])),

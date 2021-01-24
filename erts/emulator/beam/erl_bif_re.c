@@ -66,7 +66,7 @@ static void erts_erts_pcre_stack_free(void *ptr) {
 
 #define ERTS_PCRE_STACK_MARGIN (10*1024)
 
-#  define ERTS_STACK_LIMIT ((char *) ethr_get_stacklimit())
+#  define ERTS_STACK_LIMIT ((char *) erts_get_stacklimit())
 
 static int
 stack_guard_downwards(void)
@@ -534,13 +534,14 @@ re_compile(Process* p, Eterm arg1, Eterm arg2)
     int unicode = 0;
     int buffres;
 
-    if (parse_options(arg2,&options,NULL,&pflags,NULL,NULL,NULL,NULL)
-	< 0) {
-	BIF_ERROR(p,BADARG);
+    if (parse_options(arg2,&options,NULL,&pflags,NULL,NULL,NULL,NULL) < 0) {
+    opt_error:
+        p->fvalue = am_badopt;
+	BIF_ERROR(p, BADARG | EXF_HAS_EXT_INFO);
     }
 
     if (pflags & PARSE_FLAG_UNIQUE_EXEC_OPT) {
-	BIF_ERROR(p,BADARG);
+        goto opt_error;
     }
 
     unicode = (pflags & PARSE_FLAG_UNICODE) ? 1 : 0;
@@ -1118,7 +1119,8 @@ re_run(Process *p, Eterm arg1, Eterm arg2, Eterm arg3, int first)
     if (parse_options(arg3,&comp_options,&options,&pflags,&startoffset,capture,
 		      &match_limit,&match_limit_recursion)
 	< 0) {
-	BIF_ERROR(p,BADARG);
+        p->fvalue = am_badopt;
+	BIF_ERROR(p, BADARG | EXF_HAS_EXT_INFO);
     }
     if (!first) {
         /*
@@ -1356,7 +1358,7 @@ handle_iolist:
             ERTS_VBUMP_ALL_REDS(p);
             hp = HAlloc(p, ERTS_MAGIC_REF_THING_SIZE);
             magic_ref = erts_mk_magic_ref(&hp, &MSO(p), mbp);
-            BIF_TRAP3(&re_exec_trap_export, 
+            BIF_TRAP3(&re_exec_trap_export,
                       p,
                       arg1,
                       arg2 /* To avoid GC of precompiled code, XXX: not utilized yet */,

@@ -35,7 +35,7 @@
 #include "erl_version.h"
 #include "hash.h"
 #include "atom.h"
-#include "beam_load.h"
+#include "beam_code.h"
 #include "erl_hl_timer.h"
 #include "erl_thr_progress.h"
 #include "erl_proc_sig_queue.h"
@@ -44,7 +44,7 @@
 /* Forward declarations -- should really appear somewhere else */
 static void process_killer(void);
 void do_break(void);
-void erl_crash_dump_v(char *file, int line, char* fmt, va_list args);
+void erl_crash_dump_v(char *file, int line, const char* fmt, va_list args);
 
 #ifdef DEBUG
 static void bin_check(void);
@@ -55,7 +55,7 @@ static void print_garb_info(fmtfn_t to, void *to_arg, Process* p);
 static void dump_frequencies(void);
 #endif
 
-static void dump_attributes(fmtfn_t to, void *to_arg, byte* ptr, int size);
+static void dump_attributes(fmtfn_t to, void *to_arg, const byte* ptr, int size);
 
 extern char* erts_system_version[];
 
@@ -471,7 +471,7 @@ loaded(fmtfn_t to, void *to_arg)
     int i;
     int old = 0;
     int cur = 0;
-    BeamCodeHeader* code;
+    const BeamCodeHeader* code;
     Module* modp;
     ErtsCodeIndex code_ix;
 
@@ -553,7 +553,7 @@ loaded(fmtfn_t to, void *to_arg)
 
 
 static void
-dump_attributes(fmtfn_t to, void *to_arg, byte* ptr, int size)
+dump_attributes(fmtfn_t to, void *to_arg, const byte* ptr, int size)
 {
     erts_print_base64(to, to_arg, ptr, size);
     erts_print(to, to_arg, "\n");
@@ -563,6 +563,8 @@ dump_attributes(fmtfn_t to, void *to_arg, byte* ptr, int size)
 void
 do_break(void)
 {
+    const char *helpstring = "BREAK: (a)bort (A)bort with dump (c)ontinue (p)roc info (i)nfo\n"
+        "       (l)oaded (v)ersion (k)ill (D)b-tables (d)istribution\n";
     int i;
 #ifdef __WIN32__
     char *mode; /* enough for storing "window" */
@@ -577,9 +579,7 @@ do_break(void)
 
     ASSERT(erts_thr_progress_is_blocking());
 
-    erts_printf("\n"
-		"BREAK: (a)bort (A)bort with dump (c)ontinue (p)roc info (i)nfo\n"
-		"       (l)oaded (v)ersion (k)ill (D)b-tables (d)istribution\n");
+    erts_printf("\n%s", helpstring);
 
     while (1) {
 	if ((i = sys_get_key(0)) <= 0)
@@ -664,7 +664,8 @@ do_break(void)
 	case '\n':
 	    continue;
 	default:
-	    erts_printf("Eh?\n\n");
+	    erts_printf("Invalid option '%c'. Please enter one of the following:\n%s",
+                        i, helpstring);
 	}
     }
 
@@ -769,7 +770,7 @@ crash_dump_limited_writer(void* vfdp, char* buf, size_t len)
 
 /* XXX THIS SHOULD BE IN SYSTEM !!!! */
 void
-erl_crash_dump_v(char *file, int line, char* fmt, va_list args)
+erl_crash_dump_v(char *file, int line, const char* fmt, va_list args)
 {
     ErtsThrPrgrData tpd_buf; /* in case we aren't a managed thread... */
     int fd;
@@ -1018,15 +1019,18 @@ erl_crash_dump_v(char *file, int line, char* fmt, va_list args)
     dump_atoms(to, to_arg);
 
     erts_cbprintf(to, to_arg, "=end\n");
+
     if (fp) {
         fclose(fp);
+    } else {
+        close(fd);
     }
-    close(fd);
+
     erts_fprintf(stderr,"done\n");
 }
 
 void
-erts_print_base64(fmtfn_t to, void *to_arg, byte* src, Uint size)
+erts_print_base64(fmtfn_t to, void *to_arg, const byte* src, Uint size)
 {
     static const byte base64_chars[] =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

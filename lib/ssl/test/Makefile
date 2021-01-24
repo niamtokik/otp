@@ -54,8 +54,9 @@ MODULES = \
 	ssl_npn_SUITE \
 	openssl_npn_SUITE\
 	openssl_sni_SUITE\
-	ssl_mfl_SUITE \
-	ssl_renegotiate_SUITE\
+	ssl_mfl_SUITE\
+	openssl_mfl_SUITE\
+        ssl_renegotiate_SUITE\
 	openssl_renegotiate_SUITE\
 	openssl_reject_SUITE\
 	ssl_cert_tests\
@@ -79,7 +80,7 @@ MODULES = \
 	openssl_session_ticket_SUITE \
 	openssl_session_SUITE \
 	ssl_ECC_SUITE \
-	ssl_ECC_openssl_SUITE \
+	openssl_ECC_SUITE \
 	ssl_ECC\
 	ssl_upgrade_SUITE\
 	ssl_sni_SUITE \
@@ -91,7 +92,8 @@ MODULES = \
 	ssl_socket_SUITE\
 	make_certs \
         x509_test \
-	inet_crypto_dist
+	inet_crypto_dist \
+	openssl_ocsp_SUITE
 
 
 ERL_FILES = $(MODULES:%=%.erl)

@@ -2123,6 +2123,19 @@ static ERL_NIF_TERM make_map_put_nif(ErlNifEnv* env, int argc, const ERL_NIF_TER
 {
     ERL_NIF_TERM map_out = enif_make_atom(env, "undefined");
     int ret = enif_make_map_put(env, argv[0], argv[1], argv[2], &map_out);
+
+    /* build same map in dynamic env */
+    ErlNifEnv* dynenv = enif_alloc_env();
+    ERL_NIF_TERM map_out2 = enif_make_atom(env, "undefined");
+    int ret2 = enif_make_map_put(dynenv,
+                                 enif_make_copy(dynenv, argv[0]),
+                                 enif_make_copy(dynenv, argv[1]),
+                                 enif_make_copy(dynenv, argv[2]),
+                                 &map_out2);
+    if (ret != ret2 || !enif_is_identical(map_out, map_out2))
+        map_out = enif_make_string(env, "dynenv failure", ERL_NIF_LATIN1);
+    enif_free_env(dynenv);
+
     return enif_make_tuple2(env, enif_make_int(env,ret), map_out);
 }
 static ERL_NIF_TERM get_map_value_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
@@ -2136,12 +2149,37 @@ static ERL_NIF_TERM make_map_update_nif(ErlNifEnv* env, int argc, const ERL_NIF_
 {
     ERL_NIF_TERM map_out = enif_make_atom(env, "undefined");
     int ret = enif_make_map_update(env, argv[0], argv[1], argv[2], &map_out);
+
+    /* build same map in dynamic env */
+    ErlNifEnv* dynenv = enif_alloc_env();
+    ERL_NIF_TERM map_out2 = enif_make_atom(env, "undefined");
+    int ret2 = enif_make_map_update(dynenv,
+                                    enif_make_copy(dynenv, argv[0]),
+                                    enif_make_copy(dynenv, argv[1]),
+                                    enif_make_copy(dynenv, argv[2]),
+                                    &map_out2);
+    if (ret != ret2 || !enif_is_identical(map_out, map_out2))
+        map_out = enif_make_string(env, "dynenv failure", ERL_NIF_LATIN1);
+    enif_free_env(dynenv);
+
     return enif_make_tuple2(env, enif_make_int(env,ret), map_out);
 }
 static ERL_NIF_TERM make_map_remove_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 {
     ERL_NIF_TERM map_out = enif_make_atom(env, "undefined");
     int ret = enif_make_map_remove(env, argv[0], argv[1], &map_out);
+
+    /* build same map in dynamic env */
+    ErlNifEnv* dynenv = enif_alloc_env();
+    ERL_NIF_TERM map_out2 = enif_make_atom(env, "undefined");
+    int ret2 = enif_make_map_remove(dynenv,
+                                    enif_make_copy(dynenv, argv[0]),
+                                    enif_make_copy(dynenv, argv[1]),
+                                    &map_out2);
+    if (ret != ret2 || !enif_is_identical(map_out, map_out2))
+        map_out = enif_make_string(env, "dynenv failure", ERL_NIF_LATIN1);
+    enif_free_env(dynenv);
+
     return enif_make_tuple2(env, enif_make_int(env,ret), map_out);
 }
 
@@ -3345,15 +3383,15 @@ static ERL_NIF_TERM ioq(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
         ret = enif_make_resource(env, ioq);
         enif_release_resource(ioq);
         return ret;
-    } else if (enif_is_identical(argv[0], enif_make_atom(env, "inspect"))) {
+    } else if (argc >= 2 && enif_is_identical(argv[0], enif_make_atom(env, "inspect"))) {
         ErlNifIOVec vec, *iovec = NULL;
         int i, iovcnt;
         ERL_NIF_TERM *elems, tail, list;
         ErlNifEnv *myenv = NULL;
 
-        if (enif_is_identical(argv[2], enif_make_atom(env, "use_stack")))
+        if (argv >= 3 && enif_is_identical(argv[2], enif_make_atom(env, "use_stack")))
             iovec = &vec;
-        if (enif_is_identical(argv[3], enif_make_atom(env, "use_env")))
+        if (argc >= 4 && enif_is_identical(argv[3], enif_make_atom(env, "use_env")))
             myenv = env;
         if (!enif_inspect_iovec(myenv, ~(size_t)0, argv[1], &tail, &iovec))
             return enif_make_badarg(env);
@@ -3378,13 +3416,13 @@ static ERL_NIF_TERM ioq(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
 	list = enif_make_list_from_array(env, elems, iovcnt);
 	enif_free(elems);
 	return list;
-    } else {
+    } else if (argc >= 2) {
         unsigned skip;
         if (!enif_get_resource(env, argv[1], ioq_resource_type, (void**)&ioq)
             || !ioq->q)
             return enif_make_badarg(env);
 
-        if (enif_is_identical(argv[0], enif_make_atom(env, "example"))) {
+        if (argc == 3 && enif_is_identical(argv[0], enif_make_atom(env, "example"))) {
 #ifndef __WIN32__
             int fd[2], res = 0, cnt = 0;
             ERL_NIF_TERM tail;
@@ -3434,7 +3472,7 @@ static ERL_NIF_TERM ioq(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
             enif_ioq_destroy(ioq->q);
             ioq->q = NULL;
             return enif_make_atom(env, "false");
-        } else if (enif_is_identical(argv[0], enif_make_atom(env, "enqv"))) {
+        } else if (argc >= 4 && enif_is_identical(argv[0], enif_make_atom(env, "enqv"))) {
             ErlNifIOVec vec, *iovec = &vec;
             ERL_NIF_TERM tail;
 
@@ -3446,7 +3484,7 @@ static ERL_NIF_TERM ioq(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
                 return enif_make_badarg(env);
 
             return enif_make_atom(env, "true");
-        } else if (enif_is_identical(argv[0], enif_make_atom(env, "enqb"))) {
+        } else if (argc >= 4 && enif_is_identical(argv[0], enif_make_atom(env, "enqb"))) {
             ErlNifBinary bin;
             if (!enif_get_uint(env, argv[3], &skip) ||
                 !enif_inspect_binary(env, argv[2], &bin))
@@ -3456,7 +3494,7 @@ static ERL_NIF_TERM ioq(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
                 return enif_make_badarg(env);
 
             return enif_make_atom(env, "true");
-        } else if (enif_is_identical(argv[0], enif_make_atom(env, "enqbraw"))) {
+        } else if (argc >= 4 && enif_is_identical(argv[0], enif_make_atom(env, "enqbraw"))) {
             ErlNifBinary bin;
             ErlNifBinary localbin;
 	    int i;
@@ -3480,7 +3518,7 @@ static ERL_NIF_TERM ioq(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
             }
 
             return enif_make_atom(env, "false");
-        } else if (enif_is_identical(argv[0], enif_make_atom(env, "peek"))) {
+        } else if (argc >= 3 && enif_is_identical(argv[0], enif_make_atom(env, "peek"))) {
             int iovlen, num, i, off = 0;
             SysIOVec *iov = enif_ioq_peek(ioq->q, &iovlen);
             ErlNifBinary bin;
@@ -3496,7 +3534,7 @@ static ERL_NIF_TERM ioq(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
             }
 
             return enif_make_binary(env, &bin);
-        } else if (enif_is_identical(argv[0], enif_make_atom(env, "deq"))) {
+        } else if (argc >= 3 && enif_is_identical(argv[0], enif_make_atom(env, "deq"))) {
             int num;
             size_t sz;
             ErlNifUInt64 sz64;

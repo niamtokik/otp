@@ -90,7 +90,10 @@
 start() ->
     Wx = wx:new(),
     Frame = wx:batch(fun() -> create_frame(Wx) end),
+    Taskbar = wxTaskBarIcon:new([{createPopupMenu, fun() -> create_dummy_menu() end}]),
     wxWindow:show(Frame),
+    Path = filename:dirname(code:which(?MODULE)),
+    wxTaskBarIcon:setIcon(Taskbar, wxIcon:new(filename:join(Path,"sample.xpm"), [{type, ?wxBITMAP_TYPE_XPM}])),
     
     State = #state{},
     
@@ -156,15 +159,20 @@ create_file_menu() ->
             {subMenu,   create_stock_menu()},
             {text,      "&Standard items demo"}
             ])),
-    ClearLogBitmap = wxBitmap:new("copy.xpm"),
     ClearLogItem = wxMenuItem:new([
             {id,    ?menuID_FILE_CLEAR_LOG},
             {text,  "Clear &log\tCtrl-L"}   %% note mnemonic and accelerator
             ]),
-    wxMenuItem:setBitmap(ClearLogItem, ClearLogBitmap),
-            
+    ClearLogBitmap = wxBitmap:new("copy.xpm", [{type, ?wxBITMAP_TYPE_XPM}]),
+    case wxBitmap:isOk(ClearLogBitmap) of
+        true ->
+            wxMenuItem:setBitmap(ClearLogItem, ClearLogBitmap);
+        false ->
+            io:format("Could not load bitmap: ~p~n", ["copy.xpm"])
+    end,
+
     wxMenu:append(FileMenu, ClearLogItem ),
-    wxMenu:appendSeparator(FileMenu),  
+    wxMenu:appendSeparator(FileMenu),
     wxMenu:append(FileMenu, wxMenuItem:new([
             {id, ?menuID_FILE_QUIT} %,
             %{text, "E&xit\tAlt-X"}

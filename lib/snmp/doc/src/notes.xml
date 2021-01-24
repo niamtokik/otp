@@ -34,7 +34,144 @@
   </header>
 
 
-  <section><title>SNMP 5.6</title>
+  <section><title>SNMP 5.7.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    [manager] Misspelled priv protocol (atom) made it
+	    impossible to update usm user 'priv_key' configuration
+	    for usmAesCfb128Protocol via function calls.</p>
+          <p>
+	    Own Id: OTP-17110 Aux Id: ERIERL-586 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SNMP 5.7.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed usage of <c>AC_CONFIG_AUX_DIRS()</c> macros in
+	    configure script sources.</p>
+          <p>
+	    Own Id: OTP-17093 Aux Id: ERL-1447, PR-2948 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SNMP 5.7</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    If an attempt was made to send a v1 trap on a IPv6
+	    transport this could cause a master agent crash (if the
+	    agent was *not* multi-threaded).</p>
+          <p>
+	    Own Id: OTP-16920 Aux Id: OTP-16649 </p>
+        </item>
+        <item>
+          <p>
+	    The deprecation info for a couple of the deprecated MIB
+	    compiler functions where incorrect. Referred to functions
+	    in the 'snmpa' module instead of 'snmpc'.</p>
+          <p>
+	    Own Id: OTP-17056 Aux Id: OTP-17049 </p>
+        </item>
+      </list>
+    </section>
+
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    Make it possible for the agent to configure separate
+	    transports (sockets) for request-responder and
+	    trap-sender.</p>
+          <p>
+	    Own Id: OTP-16649</p>
+        </item>
+        <item>
+          <p>
+	    The mib server cache handling has been improved. First,
+	    the default gclimit has been changed from 100 to infinity
+	    (to ensure the size is as small as possible). Also, the
+	    method of removing old elements has been optimized.</p>
+          <p>
+	    Own Id: OTP-16989 Aux Id: ERIERL-544 </p>
+        </item>
+        <item>
+          <p>
+	    It is now possible to configure the agent in such a way
+	    that the order of outgoing notifications are processed in
+	    order in the agent. What happens after the notification
+	    message has left the agent (been sent) is of course still
+	    out of our control.</p>
+          <p>
+	    Own Id: OTP-17022 Aux Id: ERIERL-492 </p>
+        </item>
+        <item>
+          <p>
+	    Improve handling of the udp_error message. Basically an
+	    improved error/warning message.</p>
+          <p>
+	    Own Id: OTP-17033</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SNMP 5.6.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    For agent fix PrivParams for SNMPv3 USM with AES privacy,
+	    as earlier fixed for the manager in OTP_16541.</p>
+          <p>
+	    Own Id: OTP-15130 Aux Id: ERIERL-524, OTP-16541 </p>
+        </item>
+        <item>
+          <p>
+	    The SNMP Agent missed to re-activate datagram reception
+	    in an odd timeout case and went deaf. This bug has been
+	    fixed.</p>
+          <p>
+	    Own Id: OTP-15767 Aux Id: ERIERL-523 </p>
+        </item>
+        <item>
+          <p>
+	    Use of deprecated functions in example 2 has been removed
+	    (no more compiler warnings).</p>
+          <p>
+	    Own Id: OTP-16716</p>
+        </item>
+        <item>
+          <p>
+	    A file descriptor leak has been plugged. When calling the
+	    reconfigure function of a mib, it opened the config
+	    file(s) but never closed them on successful read.</p>
+          <p>
+	    Own Id: OTP-16760 Aux Id: ERIERL-511 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>SNMP 5.6</title>
 
     <section><title>Fixed Bugs and Malfunctions</title>
       <list>
@@ -97,6 +234,85 @@
 	    removed functions.</p>
           <p>
 	    Own Id: OTP-16469</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+  <section><title>SNMP 5.5.0.4</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+          <p>
+	    The mib server cache handling has been improved. First,
+	    the default gclimit has been changed from 100 to infinity
+	    (in order to ensure the size is as small as possible).
+	    Also the method of removing old elements has been
+	    optimized.</p>
+          <p>
+	    Own Id: OTP-16989 Aux Id: ERIERL-544 </p>
+        </item>
+        <item>
+          <p>
+	    It is now possible to configure the agent in such a way
+	    that the order of outgoing notifications are processed in
+	    order in the agent. What happens after the notification
+	    message has left the agent (been sent) is of course still
+	    out of our control.</p>
+          <p>
+	    Own Id: OTP-17022 Aux Id: ERIERL-492 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+  <section><title>SNMP 5.5.0.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    For agent fix PrivParams for SNMPv3 USM with AES privacy,
+	    as earlier fixed for the manager in OTP_16541.</p>
+          <p>
+	    Own Id: OTP-15130 Aux Id: ERIERL-524, OTP-16541 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+  <section><title>SNMP 5.5.0.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    The SNMP Agent missed to re-activate datagram reception
+	    in an odd timeout case and went deaf. This bug has been
+	    fixed.</p>
+          <p>
+	    Own Id: OTP-15767 Aux Id: ERIERL-523 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+  <section><title>SNMP 5.5.0.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    A file descriptor leak has been plugged. When calling the
+	    reconfigure function of a mib, it opened the config
+	    file(s) but never closed them on successful read.</p>
+          <p>
+	    Own Id: OTP-16760 Aux Id: ERIERL-511 </p>
         </item>
       </list>
     </section>

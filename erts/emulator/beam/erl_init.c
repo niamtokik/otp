@@ -52,11 +52,9 @@
 #include "erl_check_io.h"
 #include "erl_osenv.h"
 #include "erl_proc_sig_queue.h"
+#include "beam_load.h"
 
-#ifdef HIPE
-#include "hipe_mode_switch.h"	/* for hipe_mode_switch_init() */
-#include "hipe_signal.h"	/* for hipe_signal_init() */
-#endif
+#include "jit/beam_asm.h"
 
 #ifdef HAVE_SYS_RESOURCE_H
 #  include <sys/resource.h>
@@ -92,10 +90,10 @@ const int etp_arch_bits = 32;
 #else
 # error "Not 64-bit, nor 32-bit arch"
 #endif
-#ifdef HIPE
-const int etp_hipe = 1;
+#ifdef BEAMASM
+const int etp_beamasm = 1;
 #else
-const int etp_hipe = 0;
+const int etp_beamasm = 0;
 #endif
 #ifdef DEBUG
 const int etp_debug_compiled = 1;
@@ -136,7 +134,7 @@ Eterm erts_init_process_id = ERTS_INVALID_PID;
  * inherit previous values.
  */
 
-extern void erl_crash_dump_v(char *, int, char *, va_list);
+extern void erl_crash_dump_v(char *, int, const char *, va_list);
 #ifdef __WIN32__
 extern void ConNormalExit(void);
 extern void ConWaitForExit(void);
@@ -200,6 +198,10 @@ int erts_modified_timing_level;
 int erts_no_crash_dump = 0;	/* Use -d to suppress crash dump. */
 
 int erts_no_line_info = 0;	/* -L: Don't load line information */
+
+#ifdef BEAMASM
+int erts_asm_dump = 0;		/* -asmdump: Dump assembly code */
+#endif
 
 /*
  * Other global variables.
@@ -288,7 +290,7 @@ set_default_time_adj(int *time_correction_p, ErtsTimeWarpMode *time_warp_mode_p)
  * that don't go to the error logger go through here.
  */
 
-void erl_error(char *fmt, va_list args)
+void erl_error(const char *fmt, va_list args)
 {
     erts_vfprintf(stderr, fmt, args);
 }
@@ -308,8 +310,8 @@ erl_init(int ncpu,
 	 ErtsDbSpinCount db_spin_count)
 {
     erts_monitor_link_init();
-    erts_proc_sig_queue_init();
     erts_bif_unique_init();
+    erts_proc_sig_queue_init(); /* Must be after erts_bif_unique_init(); */
     erts_init_time(time_correction, time_warp_mode);
     erts_init_sys_common_misc();
     erts_init_process(ncpu, proc_tab_sz, legacy_proc_tab);
@@ -337,6 +339,9 @@ erl_init(int ncpu,
     init_module_table();
     init_register_table();
     init_message();
+#ifdef BEAMASM
+    beamasm_init();
+#endif
     erts_bif_info_init();
     erts_ddll_init();
     init_emulator();
@@ -367,9 +372,6 @@ erl_init(int ncpu,
 			      initializations */
 #endif
     erl_sys_late_init();
-#ifdef HIPE
-    hipe_mode_switch_init(); /* Must be after init_load/beam_catches/init */
-#endif
     packet_parser_init();
     erl_nif_init();
     erts_msacc_init();
@@ -428,8 +430,7 @@ erl_first_process_otp(char* mod_name, int argc, char** argv)
     hp += 2;
     args = CONS(hp, boot_mod, args);
 
-    so.flags = erts_default_spo_flags;
-    so.opts = NIL;
+    ERTS_SET_DEFAULT_SPAWN_OPTS(&so);
     res = erl_spawn_system_process(&parent, am_erl_init, am_start, args, &so);
     ASSERT(is_internal_pid(res));
 
@@ -450,7 +451,9 @@ erl_system_process_otp(Eterm parent_pid, char* modname, int off_heap_msgq, int p
     mod = erts_atom_put((byte *) modname, sys_strlen(modname),
                         ERTS_ATOM_ENC_LATIN1, 1);
 
-    so.flags = erts_default_spo_flags|SPO_USE_ARGS;
+    ERTS_SET_DEFAULT_SPAWN_OPTS(&so);
+
+    so.flags |= SPO_USE_ARGS;
 
     if (off_heap_msgq) {
         so.flags |= SPO_OFF_HEAP_MSGQ;
@@ -463,7 +466,6 @@ erl_system_process_otp(Eterm parent_pid, char* modname, int off_heap_msgq, int p
     so.priority       = prio;
     so.max_gen_gcs    = (Uint16) erts_atomic32_read_nob(&erts_max_gen_gcs);
     so.scheduler      = 0;
-    so.opts = NIL;
 
     res = erl_spawn_system_process(parent, mod, am_start, NIL, &so);
     ASSERT(is_internal_pid(res));
@@ -485,8 +487,7 @@ Eterm erts_internal_spawn_system_process_3(BIF_ALIST_3) {
     ASSERT(is_atom(func));
     ASSERT(erts_list_length(args) >= 0);
 
-    so.flags = erts_default_spo_flags;
-    so.opts = NIL;
+    ERTS_SET_DEFAULT_SPAWN_OPTS(&so);
     res = erl_spawn_system_process(BIF_P, mod, func, args, &so);
 
     if (is_non_value(res)) {
@@ -585,6 +586,9 @@ void erts_usage(void)
     erts_fprintf(stderr, "               in the async-thread pool, valid range is [%d-%d]\n",
 		 ERTS_ASYNC_THREAD_MIN_STACK_SIZE,
 		 ERTS_ASYNC_THREAD_MAX_STACK_SIZE);
+#ifdef BEAMASM
+    erts_fprintf(stderr, "-asmdump       dump generated assembly code for each module loaded\n");
+#endif
     erts_fprintf(stderr, "-A number      set number of threads in async thread pool,\n");
     erts_fprintf(stderr, "               valid range is [1-%d]\n",
 		 ERTS_MAX_NO_OF_ASYNC_THREADS);
@@ -1255,10 +1259,6 @@ early_init(int *argc, char **argv) /*
     erts_lcnt_late_init();
 #endif
 
-#if defined(HIPE)
-    hipe_signal_init();	/* must be done very early */
-#endif
-
     erl_sys_args(argc, argv);
 
     /* Creates threads on Windows that depend on the arguments, so has to be after erl_sys_args */
@@ -1473,9 +1473,6 @@ erl_start(int argc, char **argv)
 #endif
 		strcat(tmp, ",SMP");
 		strcat(tmp, ",ASYNC_THREADS");
-#ifdef HIPE
-		strcat(tmp, ",HIPE");
-#endif
 		erts_fprintf(stderr, "Erlang ");
 		if (tmp[1]) {
 		    erts_fprintf(stderr, "(%s) ", tmp+1);
@@ -1619,6 +1616,52 @@ erl_start(int argc, char **argv)
 	    /* define name of module for initial function */
 	    init = get_arg(argv[i]+2, argv[i+1], &i);
 	    break;
+
+	case 'J':
+#ifdef BEAMASM
+        {
+            char *sub_param = argv[i]+2;
+
+            switch (sub_param[0])
+            {
+            case 'P':
+                sub_param++;
+
+                if (has_prefix("perf", sub_param)) {
+                    arg = get_arg(sub_param+4, argv[i + 1], &i);
+
+#ifdef HAVE_LINUX_PERF_SUPPORT
+                    if (sys_strcmp(arg, "true") == 0) {
+                        erts_jit_perf_support = BEAMASM_PERF_DUMP|BEAMASM_PERF_MAP;
+                    } else if (sys_strcmp(arg, "false") == 0) {
+                        erts_jit_perf_support = 0;
+                    } else if (sys_strcmp(arg, "dump") == 0) {
+                        erts_jit_perf_support = BEAMASM_PERF_DUMP;
+                    } else if (sys_strcmp(arg, "map") == 0) {
+                        erts_jit_perf_support = BEAMASM_PERF_MAP;
+                    } else {
+                        erts_fprintf(stderr, "bad +JPperf support flag %s\n", arg);
+                        erts_usage();
+                    }
+#else
+                erts_fprintf(stderr, "+JPperf is not supported on this platform\n");
+                erts_usage();
+#endif
+                }
+                break;
+            default:
+                erts_fprintf(stderr, "invalid JIT option %s\n", arg);
+                erts_usage();
+                break;
+            }
+        }
+#else
+        erts_fprintf(stderr,
+                     "JIT is not supported on this system (option %s)\n",
+                     argv[i]);
+        erts_usage();
+#endif
+        break;
 
 	case 'B':
 	  if (argv[i][2] == 'i')          /* +Bi */
@@ -2068,6 +2111,12 @@ erl_start(int argc, char **argv)
 	    break;
 
 	case 'a':
+#ifdef BEAMASM
+	    if (strcmp(argv[i]+2, "smdump") == 0) {
+		erts_asm_dump = 1;
+		break;
+	    }
+#endif
 	    /* suggested stack size (Kilo Words) for threads in thread pool */
 	    arg = get_arg(argv[i]+2, argv[i+1], &i);
 	    erts_async_thread_suggested_stack_size = atoi(arg);
@@ -2378,9 +2427,9 @@ erl_start(int argc, char **argv)
 
 
 
-__decl_noreturn void erts_thr_fatal_error(int err, char *what)
+__decl_noreturn void erts_thr_fatal_error(int err, const char *what)
 {
-    char *errstr = err ? strerror(err) : NULL;
+    const char *errstr = err ? strerror(err) : NULL;
     erts_fprintf(stderr,
 		 "Failed to %s: %s%s(%d)\n",
 		 what,
@@ -2437,7 +2486,7 @@ system_cleanup(int flush_async)
 static int erts_exit_code;
 
 static __decl_noreturn void __noreturn
-erts_exit_vv(int n, int flush_async, char *fmt, va_list args1, va_list args2)
+erts_exit_vv(int n, int flush_async, const char *fmt, va_list args1, va_list args2)
 {
     system_cleanup(flush_async);
 
@@ -2474,7 +2523,7 @@ __decl_noreturn void __noreturn erts_exit_epilogue(void)
 }
 
 /* Exit without flushing async threads */
-__decl_noreturn void __noreturn erts_exit(int n, char *fmt, ...)
+__decl_noreturn void __noreturn erts_exit(int n, const char *fmt, ...)
 {
     va_list args1, args2;
     va_start(args1, fmt);

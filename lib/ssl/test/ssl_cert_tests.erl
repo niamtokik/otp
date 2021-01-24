@@ -21,10 +21,54 @@
 %%
 -module(ssl_cert_tests).
 
-%% Note: This directive should only be used in test suites.
--compile(export_all).
+-behaviour(ct_suite).
 
 -include_lib("public_key/include/public_key.hrl").
+
+%% Test cases
+-export([no_auth/0,
+         no_auth/1,
+         auth/0,
+         auth/1,
+         client_auth_empty_cert_accepted/0,
+         client_auth_empty_cert_accepted/1,
+         client_auth_empty_cert_rejected/0,
+         client_auth_empty_cert_rejected/1,
+         client_auth_partial_chain/0,
+         client_auth_partial_chain/1,
+         client_auth_allow_partial_chain/0,
+         client_auth_allow_partial_chain/1,
+         client_auth_do_not_allow_partial_chain/0,
+         client_auth_do_not_allow_partial_chain/1,
+         client_auth_partial_chain_fun_fail/0,
+         client_auth_partial_chain_fun_fail/1,
+         client_auth_sni/0,
+         client_auth_sni/1,
+         client_auth_seelfsigned_peer/0,
+         client_auth_seelfsigned_peer/1,
+         missing_root_cert_no_auth/0,
+         missing_root_cert_no_auth/1,
+         invalid_signature_client/0,
+         invalid_signature_client/1,
+         invalid_signature_server/0,
+         invalid_signature_server/1,
+         unsupported_sign_algo_client_auth/0,
+         unsupported_sign_algo_client_auth/1,
+         unsupported_sign_algo_cert_client_auth/0,
+         unsupported_sign_algo_cert_client_auth/1,
+         hello_retry_request/0,
+         hello_retry_request/1,
+         custom_groups/0,
+         custom_groups/1,
+         hello_retry_client_auth/0,
+         hello_retry_client_auth/1,
+         hello_retry_client_auth_empty_cert_accepted/0,
+         hello_retry_client_auth_empty_cert_accepted/1,
+         hello_retry_client_auth_empty_cert_rejected/0,
+         hello_retry_client_auth_empty_cert_rejected/1
+         ]).
+
+-export([test_ciphers/2, openssl_ciphers/0]).
 
 %%--------------------------------------------------------------------
 %% Test Cases --------------------------------------------------------
@@ -194,6 +238,18 @@ client_auth_sni(Config) when is_list(Config) ->
     %% If user verify fun is not used the ALERT will be unknown_ca
     ssl_test_lib:basic_alert(ClientOpts, ServerOpts, Config, handshake_failure).
 
+%%--------------------------------------------------------------------
+client_auth_seelfsigned_peer() ->
+    [{doc, "Check that selfsigned peer raises alert"}].
+client_auth_seelfsigned_peer(Config) when is_list(Config) ->
+    Ext = x509_test:extensions([{key_usage, [keyCertSign, cRLSign, digitalSignature, keyAgreement]}]),
+    #{cert := Cert,
+      key := Key} = public_key:pkix_test_root_cert("OTP test server ROOT", [{key, ssl_test_lib:hardcode_rsa_key(6)},
+                                                                            {extensions, Ext}]),
+    DerKey = public_key:der_encode('RSAPrivateKey', Key),
+    ssl_test_lib:basic_alert(ssl_test_lib:ssl_options([{verify, verify_peer}, {cacerts , [Cert]}], Config),
+                             ssl_test_lib:ssl_options([{cert, Cert},
+                                                       {key, {'RSAPrivateKey', DerKey}}], Config), Config, bad_certificate).
 %%--------------------------------------------------------------------
 missing_root_cert_no_auth() ->
      [{doc,"Test that the client succeds if the ROOT CA is unknown in verify_none mode"}].
@@ -367,6 +423,42 @@ hello_retry_client_auth_empty_cert_rejected(Config) ->
        
     ssl_test_lib:basic_alert(ClientOpts, ServerOpts, Config, certificate_required).
 
+test_ciphers(_, 'tlsv1.3' = Version) ->
+    Ciphers = ssl:cipher_suites(default, Version),
+    ct:log("Version ~p Testing  ~p~n", [Version, Ciphers]),
+    OpenSSLCiphers = openssl_ciphers(),
+    ct:log("OpenSSLCiphers ~p~n", [OpenSSLCiphers]),
+    lists:filter(fun(C) ->
+                         ct:log("Cipher ~p~n", [C]),
+                         lists:member(ssl_cipher_format:suite_map_to_openssl_str(C), OpenSSLCiphers)
+                 end, Ciphers);
+test_ciphers(_, Version) when Version == 'dtlsv1';
+                                Version == 'dtlsv1.2' ->
+    {_, Minor} = dtls_record:proplists(Version),
+    Ciphers = dtls_v1:suites(Minor),
+    ct:log("Version ~p Testing  ~p~n", [Version, Ciphers]),
+    OpenSSLCiphers = openssl_ciphers(),
+    ct:log("OpenSSLCiphers ~p~n", [OpenSSLCiphers]),
+    lists:filter(fun(C) ->
+                         ct:log("Cipher ~p~n", [C]),
+                         lists:member(ssl_cipher_format:suite_map_to_openssl_str(C), OpenSSLCiphers)
+                 end, Ciphers);
+test_ciphers(Kex, Version) ->
+    Ciphers = ssl:filter_cipher_suites(ssl:cipher_suites(default, Version), 
+                                       [{key_exchange, Kex}]),
+    ct:log("Version ~p Testing  ~p~n", [Version, Ciphers]),
+    OpenSSLCiphers = openssl_ciphers(),
+    ct:log("OpenSSLCiphers ~p~n", [OpenSSLCiphers]),
+    lists:filter(fun(C) ->
+                         ct:log("Cipher ~p~n", [C]),
+                         lists:member(ssl_cipher_format:suite_map_to_openssl_str(C), OpenSSLCiphers)
+                 end, Ciphers).
+
+
+
+openssl_ciphers() ->
+    Str = os:cmd("openssl ciphers"),
+    string:split(string:strip(Str, right, $\n), ":", all).
 
 %%--------------------------------------------------------------------
 %% Internal functions  -----------------------------------------------
@@ -391,40 +483,3 @@ group_config(Config, ServerOpts, ClientOpts) ->
                 {[{supported_groups, [x448, x25519]} | ServerOpts],
                  [{groups,"P-256:X25519"} | ClientOpts]}
         end.
-
-test_ciphers(_, 'tlsv1.3' = Version) ->
-    Ciphers = ssl:cipher_suites(default, Version),
-    ct:log("Version ~p Testing  ~p~n", [Version, Ciphers]),
-    OpenSSLCiphers = openssl_ciphers(),
-    ct:log("OpenSSLCiphers ~p~n", [OpenSSLCiphers]),
-    lists:filter(fun(C) ->
-                         ct:log("Cipher ~p~n", [C]),
-                         lists:member(ssl_cipher_format:suite_map_to_openssl_str(C), OpenSSLCiphers)
-                 end, Ciphers);
-test_ciphers(_, Version) when Version == 'dtlsv1';
-                                Version == 'dtlsv1.2' ->
-    {_, Minor} = dtls_record:proplists(Version),
-    Ciphers = dtls_v1:suites(Minor),
-    ct:log("Version ~p Testing  ~p~n", [Version, Ciphers]),
-    OpenSSLCiphers = openssl_ciphers(),
-    ct:log("OpenSSLCiphers ~p~n", [OpenSSLCiphers]),
-    lists:filter(fun(C) ->
-                         ct:log("Cipher ~p~n", [C]),
-                         lists:member(ssl_cipher_format:suite_map_to_openssl_str(C), OpenSSLCiphers)
-                 end, Ciphers);
-test_ciphers(Kex, Version) ->
-    Ciphers = ssl:filter_cipher_suites(ssl:cipher_suites(all, Version), 
-                                       [{key_exchange, Kex}]),
-    ct:log("Version ~p Testing  ~p~n", [Version, Ciphers]),
-    OpenSSLCiphers = openssl_ciphers(),
-    ct:log("OpenSSLCiphers ~p~n", [OpenSSLCiphers]),
-    lists:filter(fun(C) ->
-                         ct:log("Cipher ~p~n", [C]),
-                         lists:member(ssl_cipher_format:suite_map_to_openssl_str(C), OpenSSLCiphers)
-                 end, Ciphers).
-
-
-
-openssl_ciphers() ->
-    Str = os:cmd("openssl ciphers"),
-    string:split(string:strip(Str, right, $\n), ":", all).

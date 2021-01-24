@@ -21,11 +21,29 @@
 
 -module(ssh_sup_SUITE).
 -include_lib("common_test/include/ct.hrl").
--include_lib("ssh/src/ssh.hrl").
+-include("ssh.hrl").
 -include("ssh_test_lib.hrl").
 
-%% Note: This directive should only be used in test suites.
--compile(export_all).
+-export([
+         suite/0,
+         all/0,
+         groups/0,
+         init_per_suite/1,
+         end_per_suite/1,
+         init_per_group/2,
+         end_per_group/2,
+         init_per_testcase/2,
+         end_per_testcase/2
+        ]).
+
+-export([
+         default_tree/1,
+         killed_acceptor_restarts/1,
+         shell_channel_tree/1,
+         sshc_subtree/1,
+         sshd_subtree/1,
+         sshd_subtree_profile/1
+        ]).
 
 -define(USER, "Alladin").
 -define(PASSWD, "Sesame").
@@ -89,9 +107,6 @@ end_per_testcase(_, _Config) ->
 %%-------------------------------------------------------------------------
 %% Test cases 
 %%-------------------------------------------------------------------------
-default_tree() ->
-    [{doc, "Makes sure the correct processes are started and linked," 
-     "in the default case."}].
 default_tree(Config) when is_list(Config) ->
     TopSupChildren = supervisor:which_children(ssh_sup),
     2 = length(TopSupChildren),
@@ -99,24 +114,24 @@ default_tree(Config) when is_list(Config) ->
 	lists:keysearch(sshc_sup, 1, TopSupChildren),
     {value, {sshd_sup, _,supervisor,[sshd_sup]}} = 
 	lists:keysearch(sshd_sup, 1, TopSupChildren),
-    ?wait_match([], supervisor:which_children(sshc_sup)),
+    ?wait_match([{client_controller,_,worker,_}], supervisor:which_children(sshc_sup)),
     ?wait_match([], supervisor:which_children(sshd_sup)).
 
 %%-------------------------------------------------------------------------
-sshc_subtree() ->
-    [{doc, "Make sure the sshc subtree is correct"}].
 sshc_subtree(Config) when is_list(Config) ->
     {_Pid, Host, Port} = proplists:get_value(server, Config),
     UserDir = proplists:get_value(userdir, Config),
 
-    ?wait_match([], supervisor:which_children(sshc_sup)),
+    ?wait_match([{client_controller,_,worker,_}], supervisor:which_children(sshc_sup)),
 
     {ok, Pid1} = ssh:connect(Host, Port, [{silently_accept_hosts, true},
 					  {user_interaction, false},
 					  {user, ?USER}, {password, ?PASSWD},{user_dir, UserDir}]),
 
     ?wait_match([{{client,ssh_system_sup, LocalIP, LocalPort, ?DEFAULT_PROFILE},
-                  SysSup, supervisor,[ssh_system_sup]}],
+                  SysSup, supervisor,[ssh_system_sup]},
+                 {client_controller,_,worker,_}
+                ],
 		supervisor:which_children(sshc_sup),
                 [SysSup, LocalIP, LocalPort]),
     check_sshc_system_tree(SysSup, Pid1, LocalIP, LocalPort, Config),
@@ -125,18 +140,20 @@ sshc_subtree(Config) when is_list(Config) ->
 					  {user_interaction, false},
 					  {user, ?USER}, {password, ?PASSWD}, {user_dir, UserDir}]),
     ?wait_match([{_, _,supervisor,[ssh_system_sup]},
-                 {_, _,supervisor,[ssh_system_sup]}],
+                 {_, _,supervisor,[ssh_system_sup]},
+                 {client_controller,_,worker,_}
+                ],
 		supervisor:which_children(sshc_sup)),
 
     ssh:close(Pid1),
-    ?wait_match([{_, _,supervisor,[ssh_system_sup]}],
+    ?wait_match([{_, _,supervisor,[ssh_system_sup]},
+                 {client_controller,_,worker,_}
+                ],
 		supervisor:which_children(sshc_sup)),
     ssh:close(Pid2),
-    ?wait_match([], supervisor:which_children(sshc_sup)).
+    ?wait_match([{client_controller,_,worker,_}], supervisor:which_children(sshc_sup)).
 
 %%-------------------------------------------------------------------------
-sshd_subtree() ->
-    [{doc, "Make sure the sshd subtree is correct"}].
 sshd_subtree(Config) when is_list(Config) ->
     SystemDir = proplists:get_value(data_dir, Config),
     {Daemon, HostIP, Port} = ssh_test_lib:daemon([{system_dir, SystemDir},
@@ -157,8 +174,6 @@ sshd_subtree(Config) when is_list(Config) ->
     ?wait_match([], supervisor:which_children(sshd_sup)).
 
 %%-------------------------------------------------------------------------
-sshd_subtree_profile() ->
-    [{doc, "Make sure the sshd subtree using profile option is correct"}].	
 sshd_subtree_profile(Config) when is_list(Config) ->
     Profile = proplists:get_value(profile, Config), 
     SystemDir = proplists:get_value(data_dir, Config),
@@ -290,6 +305,7 @@ shell_channel_tree(Config) ->
     
     {ok, ChannelId0} = ssh_connection:session_channel(ConnectionRef, infinity),
     ok = ssh_connection:shell(ConnectionRef,ChannelId0),
+    success = ssh_connection:ptty_alloc(ConnectionRef, ChannelId0, [{pty_opts,[{onlcr,1}]}]),
 
     ?wait_match([{_, GroupPid,worker,[ssh_server_channel]}],
 		supervisor:which_children(ChannelSup),

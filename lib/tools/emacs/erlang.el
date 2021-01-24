@@ -778,6 +778,7 @@ resulting regexp is surrounded by \\_< and \\_>."
 (eval-and-compile
   (defvar erlang-int-bifs
     '("abs"
+      "alias"
       "apply"
       "atom_to_binary"
       "atom_to_list"
@@ -789,7 +790,6 @@ resulting regexp is surrounded by \\_< and \\_>."
       "binary_to_term"
       "binary_part"
       "bit_size"
-      "bitsize"
       "bitstring_to_list"
       "byte_size"
       "ceil"
@@ -895,6 +895,7 @@ resulting regexp is surrounded by \\_< and \\_>."
       "trunc"
       "tuple_size"
       "tuple_to_list"
+      "unalias"
       "unlink"
       "unregister"
       "whereis")
@@ -1050,7 +1051,7 @@ behaviour.")
     (define-key map "<"         'erlang-electric-lt)
     (define-key map ">"         'erlang-electric-gt)
     (define-key map "\C-m"      'erlang-electric-newline)
-    (define-key map [(backspace)] 'backward-delete-char-untabify)
+    (define-key map (kbd "DEL") 'backward-delete-char-untabify)
     (define-key map "\M-q"      'erlang-fill-paragraph)
     (define-key map "\M-\t"     'erlang-complete-tag)
     (define-key map "\C-c\M-\t" 'tempo-complete-tag)

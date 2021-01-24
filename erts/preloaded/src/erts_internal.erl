@@ -110,6 +110,8 @@
 
 -export([crasher/6]).
 
+-export([prepare_loading/2, beamfile_chunk/2, beamfile_module_md5/1]).
+
 %%
 %% Await result of send to port
 %%
@@ -322,14 +324,15 @@ check_process_code(Pid, Module, OptionList)  ->
 	    end
     end.
 
-% gets async opt and verify valid option list
+%% gets async opt and verify valid option list
 get_cpc_opts([{async, _ReqId} = AsyncTuple | Options], _OldAsync) ->
     get_cpc_opts(Options, AsyncTuple);
-get_cpc_opts([{allow_gc, AllowGC} | Options], Async) when AllowGC == true;
-							  AllowGC == false ->
+get_cpc_opts([{allow_gc, AllowGC} | Options], Async) when is_boolean(AllowGC) ->
     get_cpc_opts(Options, Async);
 get_cpc_opts([], Async) ->
-    Async.
+    Async;
+get_cpc_opts(_, _) ->
+    error(bad_option).
 
 -spec check_dirty_process_code(Pid, Module) -> Result when
       Result :: boolean() | 'normal' | 'busy',
@@ -508,7 +511,7 @@ microstate_accounting(Ref, Threads) ->
                    | existing | existing_processes | existing_ports
                    | new | new_processes | new_ports,
       How :: boolean(),
-      FlagList :: [].
+      FlagList :: list().
 trace(_PidSpec, _How, _FlagList) ->
     erlang:nif_error(undefined).
 
@@ -524,7 +527,7 @@ trace(_PidSpec, _How, _FlagList) ->
                  | boolean()
                  | restart
                  | pause,
-      FlagList :: [ ].
+      FlagList :: list().
 trace_pattern(_MFA, _MatchSpec, _FlagList) ->
     erlang:nif_error(undefined).
 
@@ -846,7 +849,7 @@ get_internal_state_blocked(Arg) ->
       Function :: atom(),
       Args :: [term()],
       Opts :: [term()],
-      Res :: reference() | 'badarg'.
+      Res :: reference() | 'badarg' | 'badopt'.
 
 spawn_request(_Module, _Function, _Args, _Opts) ->
     erlang:nif_error(undef).
@@ -922,3 +925,25 @@ crasher(Node,Mod,Fun,Args,Opts,Reason) ->
     error_logger:warning_msg("** Can not start ~w:~w,~w (~w) on ~w **~n",
 			     [Mod,Fun,Args,Opts,Node]),
     erlang:exit(Reason).
+
+%%
+%% Actual BIF for erlang:prepare_loading/2, which decompresses the module when
+%% necessary to save us from having to do it in C code.
+%%
+-spec prepare_loading(Module, Code) -> PreparedCode | {error, Reason} when
+      Module :: module(),
+      Code :: binary(),
+      PreparedCode :: erlang:prepared_code(),
+      Reason :: badfile.
+prepare_loading(_Module, _Code) ->
+    erlang:nif_error(undefined).
+
+-spec beamfile_chunk(Bin, Chunk) -> binary() | undefined when
+      Bin :: binary(),
+      Chunk :: string().
+beamfile_chunk(_Bin, _Chunk) ->
+    erlang:nif_error(undefined).
+
+-spec beamfile_module_md5(binary()) -> binary() | undefined.
+beamfile_module_md5(_Bin) ->
+    erlang:nif_error(undefined).

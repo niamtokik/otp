@@ -414,7 +414,8 @@ alg(ConnectionHandler) ->
 						 | undefined,
 	  auth_user                             :: string()
 						 | undefined,
-	  connection_state                      :: #connection{},
+	  connection_state                      :: #connection{}
+						 | undefined,
 	  latest_channel_id         = 0         :: non_neg_integer()
                                                  | undefined,
 	  transport_protocol                    :: atom()
@@ -668,8 +669,8 @@ handle_event(_, _Event, {init_error,Error}=StateName, D) ->
 
 %%% ######## {hello, client|server} ####
 %% The very first event that is sent when the we are set as controlling process of Socket
-handle_event(_, socket_control, {hello,_}=StateName, D) ->
-    VsnMsg = ssh_transport:hello_version_msg(string_version(D#data.ssh_params)),
+handle_event(_, socket_control, {hello,_}=StateName, #data{ssh_params = Ssh0} = D) ->
+    VsnMsg = ssh_transport:hello_version_msg(string_version(Ssh0)),
     send_bytes(VsnMsg, D),
     case inet:getopts(Socket=D#data.socket, [recbuf]) of
 	{ok, [{recbuf,Size}]} ->
@@ -680,7 +681,8 @@ handle_event(_, socket_control, {hello,_}=StateName, D) ->
 				  % be max ?MAX_PROTO_VERSION bytes:
 				  {recbuf, ?MAX_PROTO_VERSION},
 				  {nodelay,true}]),
-	    {keep_state, D#data{inet_initial_recbuf_size=Size}};
+            Time = ?GET_OPT(hello_timeout, Ssh0#ssh.opts, infinity),
+	    {keep_state, D#data{inet_initial_recbuf_size=Size}, [{state_timeout,Time,no_hello_received}] };
 
 	Other ->
             ?call_disconnectfun_and_log_cond("Option return", 
@@ -729,6 +731,10 @@ handle_event(_, {version_exchange,Version}, {hello,Role}, D0) ->
 	    {stop, Shutdown, D}
     end;
 
+handle_event(_, no_hello_received, {hello,_Role}=StateName, D0) ->
+    {Shutdown, D} =
+        ?send_disconnect(?SSH_DISCONNECT_PROTOCOL_ERROR, "No HELLO recieved", StateName, D0),
+    {stop, Shutdown, D};
 		  
 %%% ######## {kexinit, client|server, init|renegotiate} ####
 
@@ -1103,7 +1109,7 @@ handle_event(_, {#ssh_msg_kexinit{},_}, {connected,Role}, D0) ->
 
 handle_event(_, #ssh_msg_disconnect{description=Desc} = Msg, StateName, D0) ->
     {disconnect, _, RepliesCon} =
-	ssh_connection:handle_msg(Msg, D0#data.connection_state, role(StateName)),
+	ssh_connection:handle_msg(Msg, D0#data.connection_state, role(StateName), D0#data.ssh_params),
     {Actions,D} = send_replies(RepliesCon, D0),
     disconnect_fun("Received disconnect: "++Desc, D),
     {stop_and_reply, {shutdown,Desc}, Actions, D};
@@ -1123,7 +1129,7 @@ handle_event(internal, {conn_msg,Msg}, StateName, #data{starter = User,
                                                         event_queue = Qev0} = D0) ->
     Role = role(StateName),
     Rengotation = renegotiation(StateName),
-    try ssh_connection:handle_msg(Msg, Connection0, Role) of
+    try ssh_connection:handle_msg(Msg, Connection0, Role, D0#data.ssh_params) of
 	{disconnect, Reason0, RepliesConn} ->
             {Repls, D} = send_replies(RepliesConn, D0),
             case {Reason0,Role} of
@@ -1233,12 +1239,20 @@ handle_event(cast, {adjust_window,ChannelId,Bytes}, StateName, D) when ?CONNECTE
 	    keep_state_and_data
     end;
 
-handle_event(cast, {reply_request,success,ChannelId}, StateName, D) when ?CONNECTED(StateName) ->
+handle_event(cast, {reply_request,Resp,ChannelId}, StateName, D) when ?CONNECTED(StateName) ->
     case ssh_client_channel:cache_lookup(cache(D), ChannelId) of
-	#channel{remote_id = RemoteId} ->
-	    Msg = ssh_connection:channel_success_msg(RemoteId),
-	    update_inet_buffers(D#data.socket),
-	    {keep_state, send_msg(Msg,D)};
+        #channel{remote_id = RemoteId} when Resp== success ; Resp==failure ->
+            Msg = 
+                case Resp of
+                    success -> ssh_connection:channel_success_msg(RemoteId);
+                    failure -> ssh_connection:channel_failure_msg(RemoteId)
+                end,
+            update_inet_buffers(D#data.socket),
+            {keep_state, send_msg(Msg,D)};
+
+        #channel{} ->
+            Details = io_lib:format("Unhandled reply in state ~p:~n~p", [StateName,Resp]),
+            ?send_disconnect(?SSH_DISCONNECT_PROTOCOL_ERROR, Details, StateName, D);
 
 	undefined ->
 	    keep_state_and_data
@@ -1765,8 +1779,8 @@ terminate(shutdown, _StateName, D0) ->
                  D0),
     close_transport(D);
 
-terminate(kill, _StateName, D) ->
-    %% Got a kill signal
+terminate(killed, _StateName, D) ->
+    %% Got a killed signal
     stop_subsystem(D),
     close_transport(D);
 
@@ -1864,26 +1878,36 @@ stop_subsystem(#data{ssh_params =
                          #ssh{role = Role},
                      connection_state =
                          #connection{system_supervisor = SysSup,
-                                     sub_system_supervisor = SubSysSup}
+                                     sub_system_supervisor = SubSysSup,
+                                     options = Opts}
                     }) when is_pid(SysSup) andalso is_pid(SubSysSup)  ->
-    process_flag(trap_exit, false),
     C = self(),
     spawn(fun() ->
-                  Mref = erlang:monitor(process, C),
-                  receive
-                      {'DOWN', Mref, process, C, _Info} -> ok
-                  after
-                      10000 -> ok
-                  end,
-                  case Role of
-                      client ->
+                  wait_until_dead(C, 10000),
+                  case {Role, ?GET_INTERNAL_OPT(connected_socket,Opts,non_socket_started)} of
+                      {server, non_socket_started} ->
+                          ssh_system_sup:stop_subsystem(SysSup, SubSysSup);
+                      {client, non_socket_started} ->
                           ssh_system_sup:stop_system(Role, SysSup);
-                      _ ->
-                          ssh_system_sup:stop_subsystem(SysSup, SubSysSup)
+                      {server, _Socket} ->
+                          ssh_system_sup:stop_system(Role, SysSup);
+                      {client, _Socket} ->
+                          ssh_system_sup:stop_subsystem(SysSup, SubSysSup),
+                          wait_until_dead(SubSysSup, 1000),
+                          sshc_sup:stop_system(SysSup)
                   end
           end);
 stop_subsystem(_) ->
     ok.
+
+
+wait_until_dead(Pid, Timeout) ->
+    Mref = erlang:monitor(process, Pid),
+    receive
+        {'DOWN', Mref, process, Pid, _Info} -> ok
+    after
+        Timeout -> ok
+    end.
 
 
 close_transport(#data{transport_cb = Transport,
@@ -2567,7 +2591,7 @@ ssh_dbg_format(connection_events, {call, {?MODULE,handle_event, [EventType, Even
     ];
 ssh_dbg_format(connection_events, {return_from, {?MODULE,handle_event,4}, Ret}) ->
     ["Connection event result\n",
-     io_lib:format("~p~n", [event_handler_result(Ret)])
+     io_lib:format("~p~n", [ssh_dbg:reduce_state(Ret, #data{})])
     ];
 
 ssh_dbg_format(renegotiation, {call, {?MODULE,init_renegotiate_timers,[OldState,NewState,D]}}) ->
@@ -2659,39 +2683,3 @@ ssh_dbg_format(disconnect, {call,{?MODULE,send_disconnect,
 ssh_dbg_format(renegotiation, {return_from, {?MODULE,send_disconnect,7}, _Ret}) ->
     skip.
 
-
-event_handler_result({next_state, NextState, _NewData}) ->
-    {next_state, NextState, "#data{}"};
-event_handler_result({next_state, NextState, _NewData, Actions}) ->
-    {next_state, NextState, "#data{}", Actions};
-event_handler_result(R) ->
-    state_callback_result(R).
-
-state_callback_result({keep_state, _NewData}) ->
-    {keep_state, "#data{}"};
-state_callback_result({keep_state, _NewData, Actions}) ->
-    {keep_state, "#data{}", Actions};
-state_callback_result(keep_state_and_data) ->
-    keep_state_and_data;
-state_callback_result({keep_state_and_data, Actions}) ->
-    {keep_state_and_data, Actions};
-state_callback_result({repeat_state, _NewData}) ->
-    {repeat_state, "#data{}"};
-state_callback_result({repeat_state, _NewData, Actions}) ->
-    {repeat_state, "#data{}", Actions};
-state_callback_result(repeat_state_and_data) ->
-    repeat_state_and_data;
-state_callback_result({repeat_state_and_data, Actions}) ->
-    {repeat_state_and_data, Actions};
-state_callback_result(stop) ->
-    stop;
-state_callback_result({stop, Reason}) ->
-    {stop, Reason};
-state_callback_result({stop, Reason, _NewData}) ->
-    {stop, Reason, "#data{}"};
-state_callback_result({stop_and_reply, Reason,  Replies}) ->
-    {stop_and_reply, Reason,  Replies};
-state_callback_result({stop_and_reply, Reason,  Replies, _NewData}) ->
-    {stop_and_reply, Reason,  Replies, "#data{}"};
-state_callback_result(R) ->
-    R.

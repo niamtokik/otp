@@ -133,12 +133,16 @@
           certfile                   => {<<>>,      [versions]},
           ciphers                    => {[],        [versions]},
           client_renegotiation       => {undefined, [versions]},
+          cookie                     => {true,      [versions]},
           crl_cache                  => {{ssl_crl_cache, {internal, []}}, [versions]},
           crl_check                  => {false,     [versions]},
           customize_hostname_check   => {[],        [versions]},
-          depth                      => {1,         [versions]},
+          depth                      => {10,         [versions]},
           dh                         => {undefined, [versions]},
           dhfile                     => {undefined, [versions]},
+          early_data                 => {undefined, [versions,
+                                                     session_tickets,
+                                                     use_ticket]},
           eccs                       => {undefined, [versions]},
           erl_dist                   => {false,     [versions]},
           fail_if_no_peer_cert       => {false,     [versions]},
@@ -154,9 +158,20 @@
           log_level                  => {notice,    [versions]},
           max_handshake_size         => {?DEFAULT_MAX_HANDSHAKE_SIZE, [versions]},
           middlebox_comp_mode        => {true, [versions]},
+          max_early_data             => {undefined, [versions,
+                                                     early_data,
+                                                     session_tickets]},
           max_fragment_length        => {undefined, [versions]},
           next_protocol_selector     => {undefined, [versions]},
           next_protocols_advertised  => {undefined, [versions]},
+          %% If enable OCSP stapling
+          ocsp_stapling              => {false, [versions]},
+          %% Optional arg, if give suggestion of OCSP responders
+          ocsp_responder_certs       => {[], [versions,
+                                              ocsp_stapling]},
+          %% Optional arg, if add nonce extension in request
+          ocsp_nonce                 => {true, [versions,
+                                                ocsp_stapling]},
           padding_check              => {true,      [versions]},
           partial_chain              => {fun(_) -> unknown_ca end, [versions]},
           password                   => {"",        [versions]},
@@ -166,6 +181,7 @@
           reuse_session              => {undefined, [versions]},
           reuse_sessions             => {true,      [versions]},
           secure_renegotiate         => {true,      [versions]},
+          keep_secrets               => {false,     [versions]},
           server_name_indication     => {undefined, [versions]},
           session_tickets            => {disabled,     [versions]},
           signature_algs             => {undefined, [versions]},
@@ -182,15 +198,15 @@
                                                        partial_chain]},
           verify_fun                 =>
               {
-               {fun(_,{bad_cert, _}, UserState) ->
+               {fun(_, {bad_cert, _}, UserState) ->
                         {valid, UserState};
-                   (_,{extension, #'Extension'{critical = true}}, UserState) ->
+                   (_, {extension, #'Extension'{critical = true}}, UserState) ->
                         %% This extension is marked as critical, so
                         %% certificate verification should fail if we don't
                         %% understand the extension.  However, this is
                         %% `verify_none', so let's accept it anyway.
                         {valid, UserState};
-                   (_,{extension, _}, UserState) ->
+                   (_, {extension, _}, UserState) ->
                         {unknown, UserState};
                    (_, valid, UserState) ->
                         {valid, UserState};
@@ -225,6 +241,17 @@
 				{next_state, state_name(), any(), timeout()} |
 				{stop, any(), any()}.
 -type ssl_options()          :: map().
+
+%% Internal ticket data record holding pre-processed ticket data.
+-record(ticket_data,
+        {key,                  %% key in client ticket store
+         pos,                  %% ticket position in binders list
+         identity,             %% opaque ticket binary
+         psk,                  %% pre-shared key
+         nonce,                %% ticket nonce
+         cipher_suite,         %% cipher suite - hash, bulk cipher algorithm
+         max_size              %% max early data size allowed by this ticket
+        }).
 
 -endif. % -ifdef(ssl_internal).
 

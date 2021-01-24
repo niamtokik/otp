@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 2000-2018. All Rights Reserved.
+%% Copyright Ericsson AB 2000-2020. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -48,7 +48,8 @@
          fun_mfa/1,
          fun_mfa_vars/1, qlc/1]).
 
--export([analyze/1, basic/1, md/1, q/1, variables/1, unused_locals/1]).
+-export([analyze/1, basic/1, md/1, q/1, variables/1, unused_locals/1,
+         behaviour_info_t/1, fake_behaviour_info_t/1]).
 
 -export([format_error/1, otp_7423/1, otp_7831/1, otp_10192/1, otp_13708/1,
          otp_14464/1, otp_14344/1]).
@@ -83,7 +84,7 @@ groups() ->
        fun_mfa_vars, qlc]},
      {analyses, [],
 
-      [analyze, basic, md, q, variables, unused_locals]},
+      [analyze, basic, md, q, variables, unused_locals, behaviour_info_t, fake_behaviour_info_t]},
      {misc, [], [format_error, otp_7423, otp_7831, otp_10192, otp_13708,
                  otp_14464, otp_14344]}].
 
@@ -667,7 +668,7 @@ modules(Conf) when is_list(Conf) ->
     xref_base:analyze(S, {call, foo}),
     {{error, _, {unavailable_analysis, {use, foo}}}, _} =
     xref_base:analyze(S, {use, foo}),
-    analyze(undefined_functions, [{x,undef,0}], S),
+    {ok, _} = analyze(undefined_functions, [{x,undef,0}], S),
     5 = length(xref_base:info(S)),
 
     %% More: all info, conversions.
@@ -741,7 +742,8 @@ add(Conf) when is_list(Conf) ->
     case os:type() of
         {unix, _} ->
             {error, _, {file_error, _, _}} =
-            xref_base:add_release(S, UDir);
+            xref_base:add_release(S, UDir),
+            true;
         _ ->
             true
     end,
@@ -762,7 +764,8 @@ add(Conf) when is_list(Conf) ->
     case os:type() of
         {unix, _} ->
             {error, _, {file_error, _, _}} =
-            xref_base:add_directory(S6, UDir);
+            xref_base:add_directory(S6, UDir),
+            true;
         _ ->
             true
     end,
@@ -1340,7 +1343,8 @@ replace(Conf) when is_list(Conf) ->
         {unix, _} ->
             hide_file(Ybeam),
             {error, _, {file_error, _, _}} =
-            xref:replace_module(s, x, Ybeam);
+            xref:replace_module(s, x, Ybeam),
+            true;
         _ ->
             true
     end,
@@ -2179,14 +2183,14 @@ variables(Conf) when is_list(Conf) ->
 
     S = set_up(S2),
 
-    eval("T1=E, T2=E*T1, T3 = T2*T2, T4=range T3, T5=T3|T4, T5",
-         [E1,E2,E3], S),
-    eval("((E*E)*(E*E)) | (range ((E*E)*(E*E)))",
-         [E1,E2,E3], S),
-    eval("T1=V*V,T2=T1*V,T3=V*V*V,T3",
-         [F1,F2,Lib], S),
-    eval("T1=V*V, T2=V*V, T1*T2",
-         [F1,F2,Lib], S),
+    {ok, _} = eval("T1=E, T2=E*T1, T3 = T2*T2, T4=range T3, T5=T3|T4, T5",
+                   [E1,E2,E3], S),
+    {ok, _} = eval("((E*E)*(E*E)) | (range ((E*E)*(E*E)))",
+                   [E1,E2,E3], S),
+    {ok, _} = eval("T1=V*V,T2=T1*V,T3=V*V*V,T3",
+                   [F1,F2,Lib], S),
+    {ok, _} = eval("T1=V*V, T2=V*V, T1*T2",
+                   [F1,F2,Lib], S),
 
     {ok, S100} = eval("T0 := E", [E1, E2, E3], S),
     {ok, S101} = eval("T1 := E  | m1", [E1, E3], S100),
@@ -2432,8 +2436,9 @@ otp_14344(Conf) when is_list(Conf) ->
     MFile1 = fname(Dir, "a"),
     Beam1 = fname(Dir, "a.beam"),
     Test1 = <<"-module(a).
-               -on_load(doit/0).
-               doit() -> ok.
+               -on_load(init/0).
+               init() -> do_init().
+               do_init() -> ok.
               ">>,
     ok = file:write_file(File1, Test1),
     {ok, a} = compile:file(File1, [debug_info,{outdir,Dir}]),
@@ -2441,7 +2446,7 @@ otp_14344(Conf) when is_list(Conf) ->
     {ok, _} = xref:start(s),
     {ok, a} = xref:add_module(s, MFile1),
 
-    {ok, [{a,doit,0}]} = xref:q(s, "OL"),
+    {ok, [{a,init,0}]} = xref:q(s, "OL"),
     {ok, []} = xref:analyze(s, locals_not_used),
 
     xref:stop(s),
@@ -2453,7 +2458,8 @@ otp_14344(Conf) when is_list(Conf) ->
 %%%
 
 copy_file(Src, Dest) ->
-    file:copy(Src, Dest).
+    {ok, _} = file:copy(Src, Dest),
+    ok.
 
 fname(N) ->
     filename:join(N).
@@ -2802,3 +2808,24 @@ add_erts_code_path(KernelPath) ->
                     [KernelPath]
             end
     end.
+
+behaviour_info_t(Config) ->
+    bi_t(_Module = bi,
+         _IsExportNotUsed = false,
+         Config).
+
+fake_behaviour_info_t(Config) ->
+    bi_t(_Module = no_bi,
+         _IsExportNotUsed = true,
+         Config).
+
+bi_t(Module, IsExportNotUsed, Conf) ->
+    LibTestDir = fname(?copydir, "lib_test"),
+    XRefServer = s,
+    {ok, Module} = compile:file(fname(LibTestDir, Module),
+                                [debug_info, {outdir, LibTestDir}]),
+    {ok, _} = start(XRefServer),
+    {ok, Module} = xref:add_module(XRefServer, fname(LibTestDir, Module)),
+    {ok, MFAs} = xref:analyze(XRefServer, exports_not_used),
+    true = lists:member({Module, behaviour_info, 1}, MFAs) =:= IsExportNotUsed,
+    _ = xref:stop(XRefServer).

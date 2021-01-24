@@ -27,8 +27,73 @@
 -include_lib("kernel/include/file.hrl").
 -include("ssh_test_lib.hrl").
 
-%% Note: This directive should only be used in test suites.
--compile(export_all).
+-export([
+         suite/0,
+         all/0,
+         groups/0,
+         init_per_suite/1,
+         end_per_suite/1,
+         init_per_group/2,
+         end_per_group/2,
+         init_per_testcase/2,
+         end_per_testcase/2
+        ]).
+
+-export([
+         always_ok/1,
+         app_test/1,
+         appup_test/1,
+         basic_test/1,
+         check_error/1,
+         cli/1,
+         cli_exit_normal/1,
+         cli_exit_status/1,
+         close/1,
+         daemon_already_started/1,
+         daemon_error_closes_port/1,
+         daemon_opt_fd/1,
+         double_close/1,
+         exec/1,
+         exec_compressed/1,
+         exec_with_io_in/1,
+         exec_with_io_out/1,
+         host_equal/2,
+         idle_time_client/1,
+         idle_time_server/1,
+         inet6_option/0,
+         inet6_option/1,
+         inet_option/1,
+         internal_error/1,
+         ips/1,
+         key_callback/1,
+         key_callback_options/1,
+         known_hosts/1,
+         login_bad_pwd_no_retry1/1,
+         login_bad_pwd_no_retry2/1,
+         login_bad_pwd_no_retry3/1,
+         login_bad_pwd_no_retry4/1,
+         login_bad_pwd_no_retry5/1,
+         misc_ssh_options/1,
+         multi_daemon_opt_fd/1,
+         openssh_zlib_basic_test/1,
+         packet_size/1,
+         pass_phrase/1,
+         peername_sockname/1,
+         send/1,
+         setopts_getopts/1,
+         shell/1,
+         shell_exit_status/1,
+         shell_no_unicode/1,
+         shell_socket/1,
+         shell_ssh_conn/1,
+         shell_unicode_string/1,
+         ssh_file_is_auth_key/1,
+         ssh_file_is_host_key/0,
+         ssh_file_is_host_key/1,
+         ssh_file_is_host_key_misc/1,
+         ssh_info_print/1
+        ]).
+
 
 -define(NEWLINE, <<"\r\n">>).
 
@@ -88,21 +153,13 @@ groups() ->
      {p_basic, [?PARALLEL], [send, peername_sockname,
                              exec, exec_compressed, 
                              exec_with_io_out, exec_with_io_in,
-                             cli,
+                             cli, cli_exit_normal, cli_exit_status,
                              idle_time_client, idle_time_server, openssh_zlib_basic_test, 
-                             misc_ssh_options, inet_option, inet6_option
-
-                             ,shell, 
-                       shell_no_unicode,
-                       shell_unicode_string,
-                       close 
-                             
+                             misc_ssh_options, inet_option, inet6_option,
+                             shell, shell_socket, shell_ssh_conn, shell_no_unicode, shell_unicode_string,
+                             close
                             ]}
     ].
-
-
-        
-
 
 %%--------------------------------------------------------------------
 init_per_suite(Config) ->
@@ -430,7 +487,8 @@ shell(Config) when is_list(Config) ->
     IO = ssh_test_lib:start_io_server(),
     Shell = ssh_test_lib:start_shell(Port, IO, [{user_dir,UserDir}]),
     receive
-	{'EXIT', _, _} ->
+	{'EXIT', _, _} = Exit ->
+            ct:log("~p:~p ~p", [?MODULE,?LINE,Exit]),
 	    ct:fail(no_ssh_connection);  
 	ErlShellStart ->
 	    ct:log("Erlang shell start: ~p~n", [ErlShellStart]),
@@ -439,6 +497,77 @@ shell(Config) when is_list(Config) ->
 	30000 -> ct:fail("timeout ~p:~p",[?MODULE,?LINE])
     end.
     
+%%--------------------------------------------------------------------
+%%% Test that ssh:shell/2 works when attaching to a open TCP-connection
+shell_socket(Config) when is_list(Config) ->
+    process_flag(trap_exit, true),
+    SystemDir = filename:join(proplists:get_value(priv_dir, Config), system),
+    UserDir = proplists:get_value(priv_dir, Config),
+
+    {_Pid, Host0, Port} = ssh_test_lib:daemon([{system_dir, SystemDir},{user_dir, UserDir},
+					       {failfun, fun ssh_test_lib:failfun/2}]),
+    Host = ssh_test_lib:mangle_connect_address(Host0),
+    ct:sleep(500),
+
+    %% First test with active mode:
+    {ok,ActiveSock} = gen_tcp:connect(Host,
+                                      Port,
+                                      [{active,true}]),
+    {error,not_passive_mode} = ssh:shell(ActiveSock),
+    ct:log("~p:~p active tcp socket failed ok", [?MODULE,?LINE]),
+    gen_tcp:close(ActiveSock),
+
+    %% Secondly, test with an UDP socket:
+    {ok,BadSock} = gen_udp:open(0),
+    {error,not_tcp_socket} = ssh:shell(BadSock),
+    ct:log("~p:~p udp socket failed ok", [?MODULE,?LINE]),
+    gen_udp:close(BadSock),
+
+    %% And finaly test with passive mode (which should work):
+    IO = ssh_test_lib:start_io_server(),
+    {ok,Sock} = gen_tcp:connect(Host, Port, [{active,false}]),
+    Shell = ssh_test_lib:start_shell(Sock, IO, [{user_dir,UserDir}]),
+    gen_tcp:controlling_process(Sock, Shell),
+    Shell ! start,
+
+    receive
+	{'EXIT', _, _} = Exit ->
+            ct:log("~p:~p ~p", [?MODULE,?LINE,Exit]),
+	    ct:fail(no_ssh_connection);
+	ErlShellStart ->
+	    ct:log("Erlang shell start: ~p~n", [ErlShellStart]),
+	    do_shell(IO, Shell)
+    after
+	30000 -> ct:fail("timeout ~p:~p",[?MODULE,?LINE])
+    end.
+
+%%--------------------------------------------------------------------
+%%% Test that ssh:shell/2 works when attaching to a open SSH-connection
+shell_ssh_conn(Config) when is_list(Config) ->
+    process_flag(trap_exit, true),
+    SystemDir = filename:join(proplists:get_value(priv_dir, Config), system),
+    UserDir = proplists:get_value(priv_dir, Config),
+
+    {_Pid, Host, Port} = ssh_test_lib:daemon([{system_dir, SystemDir},{user_dir, UserDir},
+					       {failfun, fun ssh_test_lib:failfun/2}]),
+    ct:sleep(500),
+
+    IO = ssh_test_lib:start_io_server(),
+    {ok,C} = ssh:connect(Host, Port, [{silently_accept_hosts, true},
+                                      {user_dir, UserDir},
+                                      {user_interaction, false}]),
+    Shell = ssh_test_lib:start_shell(C, IO, undefined),
+    receive
+	{'EXIT', _, _} = Exit ->
+            ct:log("~p:~p ~p", [?MODULE,?LINE,Exit]),
+	    ct:fail(no_ssh_connection);
+	ErlShellStart ->
+	    ct:log("Erlang shell start: ~p~n", [ErlShellStart]),
+	    do_shell(IO, Shell)
+    after
+	30000 -> ct:fail("timeout ~p:~p",[?MODULE,?LINE])
+    end.
+
 %%--------------------------------------------------------------------
 cli(Config) when is_list(Config) ->
     process_flag(trap_exit, true),
@@ -478,6 +607,94 @@ cli(Config) when is_list(Config) ->
      	    ok
     after 
 	30000 -> ct:fail("timeout ~p:~p",[?MODULE,?LINE])
+    end.
+
+%%-----------------------------------------------------------------------------
+%%% Test that SSH client receives exit-status 0 on successful command execution
+cli_exit_normal(Config) when is_list(Config) ->
+    process_flag(trap_exit, true),
+    SystemDir = filename:join(proplists:get_value(priv_dir, Config), system),
+    UserDir = proplists:get_value(priv_dir, Config),
+
+    {_Pid, Host, Port} = ssh_test_lib:daemon([{system_dir, SystemDir},{user_dir, UserDir},
+                           {password, "morot"},
+                           {ssh_cli, {ssh_cli, [fun (_) -> spawn(fun () -> ok end) end]}},
+                           {subsystems, []},
+                           {failfun, fun ssh_test_lib:failfun/2}]),
+    ct:sleep(500),
+
+    ConnectionRef = ssh_test_lib:connect(Host, Port, [{silently_accept_hosts, true},
+                              {user, "foo"},
+                              {password, "morot"},
+                              {user_interaction, false},
+                              {user_dir, UserDir}]),
+
+    {ok, ChannelId} = ssh_connection:session_channel(ConnectionRef, infinity),
+    ssh_connection:shell(ConnectionRef, ChannelId),
+
+    receive
+        {ssh_cm, ConnectionRef,{eof, ChannelId}} ->
+            ok
+    after
+    30000 -> ct:fail("timeout ~p:~p",[?MODULE,?LINE])
+    end,
+
+    receive
+        {ssh_cm, ConnectionRef,{exit_status,ChannelId,0}} ->
+            ok
+    after
+    30000 -> ct:fail("timeout ~p:~p",[?MODULE,?LINE])
+    end,
+
+    receive
+        {ssh_cm, ConnectionRef,{closed, ChannelId}} ->
+            ok
+    after
+    30000 -> ct:fail("timeout ~p:~p",[?MODULE,?LINE])
+    end.
+
+%%---------------------------------------------------------
+%%% Test that SSH client receives user provided exit-status
+cli_exit_status(Config) when is_list(Config) ->
+    process_flag(trap_exit, true),
+    SystemDir = filename:join(proplists:get_value(priv_dir, Config), system),
+    UserDir = proplists:get_value(priv_dir, Config),
+
+    {_Pid, Host, Port} = ssh_test_lib:daemon([{system_dir, SystemDir},{user_dir, UserDir},
+                           {password, "morot"},
+                           {ssh_cli, {ssh_cli, [fun (_) -> spawn(fun () -> exit({exit_status, 7}) end) end]}},
+                           {subsystems, []},
+                           {failfun, fun ssh_test_lib:failfun/2}]),
+    ct:sleep(500),
+
+    ConnectionRef = ssh_test_lib:connect(Host, Port, [{silently_accept_hosts, true},
+                              {user, "foo"},
+                              {password, "morot"},
+                              {user_interaction, false},
+                              {user_dir, UserDir}]),
+
+    {ok, ChannelId} = ssh_connection:session_channel(ConnectionRef, infinity),
+    ssh_connection:shell(ConnectionRef, ChannelId),
+
+    receive
+        {ssh_cm, ConnectionRef,{eof, ChannelId}} ->
+            ok
+    after
+    30000 -> ct:fail("timeout ~p:~p",[?MODULE,?LINE])
+    end,
+
+    receive
+        {ssh_cm, ConnectionRef,{exit_status,ChannelId,7}} ->
+            ok
+    after
+    30000 -> ct:fail("timeout ~p:~p",[?MODULE,?LINE])
+    end,
+
+    receive
+        {ssh_cm, ConnectionRef,{closed, ChannelId}} ->
+            ok
+    after
+    30000 -> ct:fail("timeout ~p:~p",[?MODULE,?LINE])
     end.
 
 %%--------------------------------------------------------------------
@@ -1218,11 +1435,10 @@ shell_exit_status(Config) when is_list(Config) ->
     SystemDir = proplists:get_value(data_dir, Config),
     UserDir = proplists:get_value(priv_dir, Config),
 
-    ShellFun = fun (_User) -> spawn(fun() -> ok end) end,
     {Pid, Host, Port} = ssh_test_lib:daemon([{system_dir, SystemDir},
                                              {user_dir, UserDir},
                                              {user_passwords, [{"vego", "morot"}]},
-                                             {shell, ShellFun},
+                                             {shell, {?MODULE,always_ok,[]}},
                                              {failfun, fun ssh_test_lib:failfun/2}]),
     ConnectionRef =
         ssh_test_lib:connect(Host, Port, [{silently_accept_hosts, true},
@@ -1236,14 +1452,15 @@ shell_exit_status(Config) when is_list(Config) ->
     ssh_test_lib:receive_exec_end(ConnectionRef, ChannelId),
     ssh:stop_daemon(Pid).
 
-
+always_ok(_) -> ok.
+    
 %%----------------------------------------------------------------------------
 setopts_getopts(Config) ->
     process_flag(trap_exit, true),
     SystemDir = proplists:get_value(data_dir, Config),
     UserDir = proplists:get_value(priv_dir, Config),
 
-    ShellFun = fun (_User) -> spawn(fun() -> ok end) end,
+    ShellFun = fun (_User, _Peer) -> spawn(fun() -> ok end) end,
     {Pid, Host, Port} = ssh_test_lib:daemon([{system_dir, SystemDir},
                                              {user_dir, UserDir},
                                              {user_passwords, [{"vego", "morot"}]},
@@ -1251,6 +1468,7 @@ setopts_getopts(Config) ->
                                              {failfun, fun ssh_test_lib:failfun/2}]),
     ConnectionRef =
         ssh_test_lib:connect(Host, Port, [{silently_accept_hosts, true},
+                                          {quiet_mode, true}, % Just to use quiet_mode once
                                           {user_dir, UserDir},
                                           {user, "vego"},
                                           {password, "morot"},
@@ -1293,71 +1511,19 @@ basic_test(Config) ->
     ok = ssh:close(CM),
     ssh:stop_daemon(Pid).
 
-do_shell(IO, Shell) ->
-    receive
-	ErlPrompt0 ->
-	    ct:log("Erlang prompt: ~p~n", [ErlPrompt0])
-    end,
-    IO ! {input, self(), "1+1.\r\n"},
-     receive
-	Echo0 ->
-	     ct:log("Echo: ~p ~n", [Echo0])
-    after 
-	10000 -> ct:fail("timeout ~p:~p",[?MODULE,?LINE])
-    end,
-    receive
-	?NEWLINE ->
-	    ok
-    after 
-	10000 -> ct:fail("timeout ~p:~p",[?MODULE,?LINE])
-    end,
-    receive
-	Result0 = <<"2">> ->
-	    ct:log("Result: ~p~n", [Result0])
-    after 
-	10000 -> ct:fail("timeout ~p:~p",[?MODULE,?LINE])
-    end,
-    receive
-	?NEWLINE ->
-	    ok
-    after 
-	10000 -> ct:fail("timeout ~p:~p",[?MODULE,?LINE])
-    end,
-    receive
-	ErlPrompt1 ->
-	    ct:log("Erlang prompt: ~p~n", [ErlPrompt1])
-    after 
-	10000 -> ct:fail("timeout ~p:~p",[?MODULE,?LINE])
-    end,
-    exit(Shell, kill).
-    %%Does not seem to work in the testserver!
-    %% 	IO ! {input, self(), "q().\r\n"},
-    %% receive
-    %%  	?NEWLINE ->
-    %%  	    ok
-    %% end,
-    %% receive
-    %%  	Echo1 ->
-    %% 	    ct:log("Echo: ~p ~n", [Echo1])
-    %% end,
-    %% receive
-    %% 	?NEWLINE ->
-    %%  	    ok
-    %% end,
-    %% receive
-    %%  	Result1 ->
-    %%  	    ct:log("Result: ~p~n", [Result1])
-    %%      end,
-    %% receive
-    %% 	{'EXIT', Shell, killed} ->
-    %% 	    ok
-    %% end.
-
+do_shell(IO, _Shell) ->
+    new_do_shell(IO, [new_prompt,
+                      {type,"1+1."},
+                      {expect,"2"},
+                      new_prompt,
+                      {type,"exit()."}
+                     ]).
 
 %%--------------------------------------------------------------------
 wait_for_erlang_first_line(Config) ->
     receive
-	{'EXIT', _, _} ->
+	{'EXIT', _, _} = Exit ->
+            ct:log("~p:~p ~p", [?MODULE,?LINE,Exit]),
 	    {fail,no_ssh_connection};
 	<<"Eshell ",_/binary>> = _ErlShellStart ->
 	    ct:log("Erlang shell start: ~p~n", [_ErlShellStart]),
@@ -1447,7 +1613,7 @@ new_do_shell_prompt(IO, N, type, Str, More) ->
     ct:log("Matched prompt ~p to trigger sending of next line to server",[N]),
     IO ! {input, self(), Str++"\r\n"},
     ct:log("Promt '~p> ', Sent ~ts",[N,Str++"\r\n"]),
-    new_do_shell(IO, N, [{expect_echo,Str}|More]); % expect echo of the sent line
+    new_do_shell(IO, N, More);
 new_do_shell_prompt(IO, N, Op, Str, More) ->
     ct:log("Matched prompt ~p",[N]),
     new_do_shell(IO, N, [{Op,Str}|More]).

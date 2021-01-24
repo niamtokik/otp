@@ -24,7 +24,7 @@
 	 lookup_mime_default/3, reason_phrase/1, message/3, rfc1123_date/0,
 	 rfc1123_date/1, day/1, month/1,
 	 flatlength/1, split_path/1, split_script_path/1, 
-	 suffix/1, split/3, uniq/1,
+	 suffix/1, strip_extension_dot/1, split/3, uniq/1,
 	 make_name/2,make_name/3,make_name/4,strip/1,
 	 hexlist_to_integer/1,integer_to_hexlist/1,
 	 convert_request_date/1,create_etag/1,create_etag/2,
@@ -32,6 +32,12 @@
 	 modules_validate/1, module_validate/1, 
 	 dir_validate/2, file_validate/2, mime_type_validate/1, 
 	 mime_types_validate/1, custom_date/0, error_log/2]).
+
+-deprecated({flatlength, 1, "use erlang:iolist_size/1 instead"}).
+-deprecated({hexlist_to_integer, 1, "use erlang:list_to_integer/2 with base 16 instead"}).
+-deprecated({integer_to_hexlist, 1, "use erlang:integer_to_list/2 with base 16 instead"}).
+-deprecated({strip, 1, "use string:trim/1 instead"}).
+-deprecated({suffix, 1, "use filename:extension/1 and string:trim/2 instead"}).
 
 -compile({nowarn_deprecated_function, [{http_uri, encode, 1}]}).
 -compile({nowarn_deprecated_function, [{http_uri, decode, 1}]}).
@@ -169,7 +175,7 @@ reason_phrase(_) -> "Internal Server Error".
 %% message
 
 message(301,URL,_) ->
-    "The document has moved <A HREF=\""++ html_encode(uri_string:normalize(URL)) ++"\">here</A>.";
+    "The document has moved <A HREF=\""++ html_encode(URL) ++"\">here</A>.";
 message(304, _URL,_) ->
     "The document has not been changed.";
 message(400, none, _) ->
@@ -186,11 +192,11 @@ browser doesn't understand how to supply
 the credentials required.";
 message(403,RequestURI,_) ->
     "You don't have permission to access " ++ 
-	html_encode(uri_string:normalize(RequestURI)) ++ 
+	html_encode(RequestURI) ++
 	" on this server.";
 message(404,RequestURI,_) ->
     "The requested URL " ++ 
-	html_encode(uri_string:normalize(RequestURI)) ++ 
+	html_encode(RequestURI) ++
 	" was not found on this server.";
 message(408, Timeout, _) ->
     Timeout;
@@ -205,7 +211,7 @@ message(500,_,ConfigDB) ->
     "The server encountered an internal error or "
 	"misconfiguration and was unable to complete "
 	"your request.<P>Please contact the server administrator "
-	++ html_encode(ServerAdmin) ++ 
+	++ html_encode(ServerAdmin) ++
 	", and inform them of the time the error occurred "
 	"and anything you might have done that may have caused the error.";
 
@@ -214,12 +220,12 @@ message(501,{Method, RequestURI, HTTPVersion}, _ConfigDB) ->
 	is_atom(Method) ->
 	    atom_to_list(Method) ++
 		" to " ++ 
-		html_encode(uri_string:normalize(RequestURI)) ++ 
+		html_encode(RequestURI) ++
 		" (" ++ HTTPVersion ++ ") not supported.";
 	is_list(Method) ->
 	    Method ++
 		" to " ++ 
-		html_encode(RequestURI) ++ 
+		html_encode(RequestURI) ++
 		" (" ++ HTTPVersion ++ ") not supported."
     end;
 
@@ -408,10 +414,11 @@ flatlength([_H|T],L) ->
 flatlength([],L) ->
     L.
 
-%% split_path
+%% split_path, URI has been decoded once when validate
+%% and should only be decoded once(RFC3986, 2.4).
 
 split_path(URI) -> 
-    case uri_string:normalize(URI, [return_map]) of
+    case uri_string:parse(URI) of
        #{fragment := Fragment,
          path := Path,
          query := Query} ->
@@ -441,11 +448,12 @@ split_path([$/|Rest],SoFar) ->
 split_path([C|Rest],SoFar) ->
     split_path(Rest,[C|SoFar]).
 
-%% split_script_path
+%% split_script_path, URI has been decoded once when validate
+%% and should only be decoded once(RFC3986, 2.4).
 
 
 split_script_path(URI) -> 
-    case uri_string:normalize(URI, [return_map]) of
+    case uri_string:parse(URI) of
        #{fragment := _Fragment,
          path := _Path,
          query := _Query} ->
@@ -468,6 +476,14 @@ suffix(Path) ->
 	    tl(Extension)
     end.
 
+%% strip_extension_dot
+strip_extension_dot(Path) ->
+    case filename:extension(Path) of
+	[] ->
+	    [];
+	Extension ->
+	    tl(Extension)
+    end.
 
 %% strip
 strip(Value)->

@@ -22,12 +22,69 @@
 
 -module(ssl_basic_SUITE).
 
-%% Note: This directive should only be used in test suites.
--compile(export_all).
+-behaviour(ct_suite).
 
 -include_lib("common_test/include/ct.hrl").
+-include_lib("public_key/include/public_key.hrl").
 -include_lib("ssl/src/ssl_api.hrl").
 
+%% Callback functions
+-export([all/0,
+         groups/0,
+         init_per_suite/1,
+         end_per_suite/1,
+         init_per_testcase/2,
+         end_per_testcase/2]).
+
+%% Testcases
+-export([app/0,
+         app/1,
+         appup/0,
+         appup/1,
+         version_option/0,
+         version_option/1,
+         connect_twice/0,
+         connect_twice/1,
+         connect_dist/0,
+         connect_dist/1,
+         defaults/1,
+         fallback/0,
+         fallback/1,
+         cipher_format/0,
+         cipher_format/1,
+         tls_versions_option/0,
+         tls_versions_option/1,
+         eccs/0,
+         eccs/1,
+         cipher_suites/0,
+         cipher_suites/1,
+         cipher_suites_mix/0,
+         cipher_suites_mix/1,
+         unordered_protocol_versions_server/0,
+         unordered_protocol_versions_server/1,
+         unordered_protocol_versions_client/0,
+         unordered_protocol_versions_client/1,
+         fake_root/0,
+         fake_root/1,
+         fake_root_legacy/0,
+         fake_root_legacy/1,
+         fake_root_no_intermediate/0,
+         fake_root_no_intermediate/1,
+         fake_root_no_intermediate_legacy/0,
+         fake_root_no_intermediate_legacy/1,
+         fake_intermediate_cert/0,
+         fake_intermediate_cert/1
+        ]).
+
+%% Apply export
+-export([tcp_send_recv_result/1,
+         result_ok/1,
+         protocol_info_result/1,
+         version_info_result/1,
+         connect_dist_s/1,
+         connect_dist_c/1,
+         dummy/1
+        ]).
 
 -define(TIMEOUT, 20000).
 -define(EXPIRE, 10).
@@ -62,8 +119,12 @@ basic_tests() ->
      tls_versions_option,
      eccs,
      cipher_suites,
-     old_cipher_suites,
-     cipher_suites_mix     
+     cipher_suites_mix,     
+     fake_root,
+     fake_root_no_intermediate,
+     fake_root_legacy,
+     fake_root_no_intermediate_legacy,
+     fake_intermediate_cert
     ].
 
 options_tests() ->
@@ -76,7 +137,7 @@ init_per_suite(Config0) ->
     try crypto:start() of
 	ok ->
 	    ssl_test_lib:clean_start(),
-	    %% make rsa certs using oppenssl
+	    %% make rsa certs using openssl
 	    {ok, _} = make_certs:all(proplists:get_value(data_dir, Config0),
 				     proplists:get_value(priv_dir, Config0)),
 	    Config1 = ssl_test_lib:make_dsa_cert(Config0),
@@ -181,12 +242,6 @@ defaults(Config) when is_list(Config)->
     false = lists:member('tlsv1.1',  proplists:get_value(supported, Versions)),
     true = lists:member('tlsv1.2', proplists:get_value(available, Versions)),
     true = lists:member('tlsv1.2',  proplists:get_value(supported, Versions)),    
-    false = lists:member({rsa,rc4_128,sha}, ssl:cipher_suites()),
-    true = lists:member({rsa,rc4_128,sha}, ssl:cipher_suites(all)),
-    false = lists:member({rsa,des_cbc,sha}, ssl:cipher_suites()),
-    true = lists:member({rsa,des_cbc,sha}, ssl:cipher_suites(all)),
-    false = lists:member({dhe_rsa,des_cbc,sha}, ssl:cipher_suites()),
-    true = lists:member({dhe_rsa,des_cbc,sha}, ssl:cipher_suites(all)),
     true = lists:member('dtlsv1.2', proplists:get_value(available_dtls, Versions)),
     true = lists:member('dtlsv1', proplists:get_value(available_dtls, Versions)),
     true = lists:member('dtlsv1.2', proplists:get_value(supported_dtls, Versions)),
@@ -222,12 +277,7 @@ cipher_format() ->
     [{doc, "Test that cipher conversion from maps | tuples | stings to binarys works"}].
 cipher_format(Config) when is_list(Config) ->
     {ok, Socket0} = ssl:listen(0, [{ciphers, ssl:cipher_suites(default, 'tlsv1.2')}]),
-    ssl:close(Socket0),
-    %% Legacy
-    {ok, Socket1} = ssl:listen(0, [{ciphers, ssl:cipher_suites()}]),
-    ssl:close(Socket1),
-    {ok, Socket2} = ssl:listen(0, [{ciphers, ssl:cipher_suites(openssl)}]),
-    ssl:close(Socket2).
+    ssl:close(Socket0).
 
 %%--------------------------------------------------------------------
 
@@ -288,18 +338,6 @@ cipher_suites(Config) when is_list(Config) ->
     [] = lists:dropwhile(fun(X) -> not lists:member(X, All) end, Anonymous),        
     true = lists:member(MandatoryCipherSuiteTLS1_0TLS1_1, All),
     true = lists:member(MandatoryCipherSuiteTLS1_0TLS1_2, All).
-
-%%--------------------------------------------------------------------
-
-old_cipher_suites() ->
-    [{doc,"Test API function cipher_suites/0"}].
-
-old_cipher_suites(Config) when is_list(Config) -> 
-    MandatoryCipherSuite = {rsa, '3des_ede_cbc', sha},
-    [_|_] = Suites = ssl:cipher_suites(),
-    Suites = ssl:cipher_suites(erlang),
-    [_|_] = ssl:cipher_suites(openssl),
-    true = lists:member(MandatoryCipherSuite,  ssl:cipher_suites(all)).
 
 %%--------------------------------------------------------------------
 cipher_suites_mix() ->
@@ -449,14 +487,252 @@ tls_versions_option(Config) when is_list(Config) ->
     end,	    
     ssl_test_lib:check_client_alert(ErrClient, protocol_version).
 
+fake_root() ->
+    [{doc,"Test that we can not use a fake root signed by other key but with correct name and serial number."}].
+fake_root(Config) when is_list(Config) ->
+    {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
+
+    Ext = x509_test:extensions([{key_usage, [keyCertSign, cRLSign, digitalSignature, keyAgreement]}]),
+    ROOT = #{cert := Cert,
+             key := _Key} = public_key:pkix_test_root_cert("SERVER ROOT CA", [{key, ssl_test_lib:hardcode_rsa_key(6)},
+                                                                             {extensions, Ext}]),
+    
+    FakeKey = ssl_test_lib:hardcode_rsa_key(1),
+    OTPCert = public_key:pkix_decode_cert(Cert, otp),
+    TBS = OTPCert#'OTPCertificate'.tbsCertificate,
+    FakeCert = public_key:pkix_sign(TBS, FakeKey),
+    
+
+    AuthExt = #'AuthorityKeyIdentifier'{authorityCertIssuer = [{directoryName, TBS#'OTPTBSCertificate'.issuer}],
+                                        authorityCertSerialNumber = TBS#'OTPTBSCertificate'.serialNumber},
+    [AuthKeyExt] = x509_test:extensions([{?'id-ce-authorityKeyIdentifier',
+                                          AuthExt,
+                                          false}]),
+    
+    #{server_config := ServerConf,
+      client_config := ClientConf} = public_key:pkix_test_data(#{server_chain => 
+                                                                     #{root => ROOT,
+                                                                       intermediates => [[{key, ssl_test_lib:hardcode_rsa_key(5)},
+                                                                                          {extensions, [AuthKeyExt]}]],
+                                                                       peer =>  [{key, ssl_test_lib:hardcode_rsa_key(4)}]},
+                                                                 client_chain => 
+                                                                     #{root => [{key, ssl_test_lib:hardcode_rsa_key(1)}], 
+                                                                       intermediates => [[{key, ssl_test_lib:hardcode_rsa_key(2)}]],
+                                                                       peer => [{key, ssl_test_lib:hardcode_rsa_key(3)}]}}
+                                                              ), 
+    
+    #{server_config := FakeServerConf} = public_key:pkix_test_data(#{server_chain => 
+                                                                         #{root =>  #{cert => FakeCert, key => FakeKey},
+                                                                           intermediates => [[{key, ssl_test_lib:hardcode_rsa_key(2)},
+                                                                                              {extensions, [AuthKeyExt]}]],
+                                                                           peer => [{key, ssl_test_lib:hardcode_rsa_key(3)}]},
+                                                                     client_chain => 
+                                                                         #{root => [{key, ssl_test_lib:hardcode_rsa_key(1)}], 
+                                                                           intermediates =>  [[{key, ssl_test_lib:hardcode_rsa_key(2)}]],
+                                                                           peer => [{key, ssl_test_lib:hardcode_rsa_key(3)}]}}
+                                                                  ), 
+    
+
+    test_fake_root(Hostname, ServerNode, ClientNode, ServerConf, ClientConf, FakeCert, FakeServerConf, bad_certificate, bad_certificate).
+  
+fake_root_no_intermediate() ->
+    [{doc,"Test that we can not use a fake root signed by other key but with correct name and serial number."}].
+
+fake_root_no_intermediate(Config) when is_list(Config) ->
+    {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
+
+    Ext = x509_test:extensions([{key_usage, [keyCertSign, cRLSign, digitalSignature, keyAgreement]}]),
+    ROOT = #{cert := Cert,
+             key := _Key} = public_key:pkix_test_root_cert("SERVER ROOT CA", [{key, ssl_test_lib:hardcode_rsa_key(6)},
+                                                                             {extensions, Ext}]),
+
+    FakeKey = ssl_test_lib:hardcode_rsa_key(1),
+    OTPCert = public_key:pkix_decode_cert(Cert, otp),
+    TBS = OTPCert#'OTPCertificate'.tbsCertificate,
+    FakeCert = public_key:pkix_sign(TBS, FakeKey),
+
+    AuthExt = #'AuthorityKeyIdentifier'{authorityCertIssuer = [{directoryName, TBS#'OTPTBSCertificate'.issuer}],
+                                        authorityCertSerialNumber = TBS#'OTPTBSCertificate'.serialNumber},
+    [AuthKeyExt] = x509_test:extensions([{?'id-ce-authorityKeyIdentifier',
+                                          AuthExt,
+                                          false}]),
+    
+        
+    #{server_config := ServerConf,
+      client_config := ClientConf} = public_key:pkix_test_data(#{server_chain => 
+                                                                     #{root => ROOT,
+                                                                       intermediates => [],
+                                                                       peer =>  [{key, ssl_test_lib:hardcode_rsa_key(4)},
+                                                                                 {extensions, [AuthKeyExt]}]},
+                                                                 client_chain => 
+                                                                     #{root => [{key, ssl_test_lib:hardcode_rsa_key(1)}], 
+                                                                       intermediates => [[{key, ssl_test_lib:hardcode_rsa_key(2)}]],
+                                                                       peer => [{key, ssl_test_lib:hardcode_rsa_key(3)}]}}
+                                                              ), 
+    
+    #{server_config := FakeServerConf} = public_key:pkix_test_data(#{server_chain => 
+                                                                         #{root =>  #{cert => FakeCert, key => FakeKey},
+                                                                           intermediates => [],
+                                                                           peer => [{key, ssl_test_lib:hardcode_rsa_key(3)},
+                                                                                    {extensions, [AuthKeyExt]}]},
+                                                                     client_chain => 
+                                                                         #{root => [{key, ssl_test_lib:hardcode_rsa_key(1)}], 
+                                                                           intermediates =>  [[{key, ssl_test_lib:hardcode_rsa_key(2)}]],
+                                                                           peer => [{key, ssl_test_lib:hardcode_rsa_key(3)}]}}
+                                                                  ), 
+    test_fake_root(Hostname, ServerNode, ClientNode, ServerConf, ClientConf, FakeCert, FakeServerConf, bad_certificate, bad_certificate).
+  
+fake_root_legacy() ->
+    [{doc,"Test that we can not use a fake root signed by other key but with correct name and serial number."}].
+fake_root_legacy(Config) when is_list(Config) ->
+    {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
+
+    Ext = x509_test:extensions([{key_usage, [keyCertSign, cRLSign, digitalSignature, keyAgreement]}]),
+    ROOT = #{cert := Cert,
+             key := _Key} = public_key:pkix_test_root_cert("SERVER ROOT CA", [{key, ssl_test_lib:hardcode_rsa_key(6)},
+                                                                             {extensions, Ext}]),
+    
+    FakeKey = ssl_test_lib:hardcode_rsa_key(1),
+    OTPCert = public_key:pkix_decode_cert(Cert, otp),
+    TBS = OTPCert#'OTPCertificate'.tbsCertificate,
+    FakeCert = public_key:pkix_sign(TBS, FakeKey),
+    
+    #{server_config := ServerConf,
+      client_config := ClientConf} = public_key:pkix_test_data(#{server_chain => 
+                                                                     #{root => ROOT,
+                                                                       intermediates => [[{key, ssl_test_lib:hardcode_rsa_key(5)}]],
+                                                                       peer =>  [{key, ssl_test_lib:hardcode_rsa_key(4)}]},
+                                                                 client_chain => 
+                                                                     #{root => [{key, ssl_test_lib:hardcode_rsa_key(1)}], 
+                                                                       intermediates => [[{key, ssl_test_lib:hardcode_rsa_key(2)}]],
+                                                                       peer => [{key, ssl_test_lib:hardcode_rsa_key(3)}]}}
+                                                              ), 
+    
+    #{server_config := FakeServerConf} = public_key:pkix_test_data(#{server_chain => 
+                                                                         #{root =>  #{cert => FakeCert, key => FakeKey},
+                                                                           intermediates => [[{key, ssl_test_lib:hardcode_rsa_key(2)}]],
+                                                                           peer => [{key, ssl_test_lib:hardcode_rsa_key(3)}]},
+                                                                     client_chain => 
+                                                                         #{root => [{key, ssl_test_lib:hardcode_rsa_key(1)}], 
+                                                                           intermediates =>  [[{key, ssl_test_lib:hardcode_rsa_key(2)}]],
+                                                                           peer => [{key, ssl_test_lib:hardcode_rsa_key(3)}]}}
+                                                                  ), 
+    
+
+    test_fake_root(Hostname, ServerNode, ClientNode, ServerConf, ClientConf, FakeCert, FakeServerConf, unknown_ca, unknown_ca).
+    
+fake_root_no_intermediate_legacy() ->
+    [{doc,"Test that we can not use a fake root signed by other key but with correct name and serial number."}].
+fake_root_no_intermediate_legacy(Config) when is_list(Config) ->
+    {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
+
+    Ext = x509_test:extensions([{key_usage, [keyCertSign, cRLSign, digitalSignature, keyAgreement]}]),
+    ROOT = #{cert := Cert,
+             key := _Key} = public_key:pkix_test_root_cert("SERVER ROOT CA", [{key, ssl_test_lib:hardcode_rsa_key(6)},
+                                                                             {extensions, Ext}]),
+
+    FakeKey = ssl_test_lib:hardcode_rsa_key(1),
+    OTPCert = public_key:pkix_decode_cert(Cert, otp),
+    TBS = OTPCert#'OTPCertificate'.tbsCertificate,
+    FakeCert = public_key:pkix_sign(TBS, FakeKey),
+        
+    #{server_config := ServerConf,
+      client_config := ClientConf} = public_key:pkix_test_data(#{server_chain => 
+                                                                     #{root => ROOT,
+                                                                       intermediates => [],
+                                                                       peer =>  [{key, ssl_test_lib:hardcode_rsa_key(4)}]},
+                                                                 client_chain => 
+                                                                     #{root => [{key, ssl_test_lib:hardcode_rsa_key(1)}], 
+                                                                       intermediates => [[{key, ssl_test_lib:hardcode_rsa_key(2)}]],
+                                                                       peer => [{key, ssl_test_lib:hardcode_rsa_key(3)}]}}
+                                                              ), 
+    
+    #{server_config := FakeServerConf} = public_key:pkix_test_data(#{server_chain => 
+                                                                         #{root =>  #{cert => FakeCert, key => FakeKey},
+                                                                           intermediates => [],
+                                                                           peer => [{key, ssl_test_lib:hardcode_rsa_key(3)}]},
+                                                                     client_chain => 
+                                                                         #{root => [{key, ssl_test_lib:hardcode_rsa_key(1)}], 
+                                                                           intermediates =>  [[{key, ssl_test_lib:hardcode_rsa_key(2)}]],
+                                                                           peer => [{key, ssl_test_lib:hardcode_rsa_key(3)}]}}
+                                                                  ), 
+    test_fake_root(Hostname, ServerNode, ClientNode, ServerConf, ClientConf, FakeCert, FakeServerConf, unknown_ca, unknown_ca).
+
+fake_intermediate_cert() ->
+    [{doc,"Test that we can not use a fake intermediat cert claiming to be signed by a trusted ROOT but is not."}].
+
+fake_intermediate_cert(Config) when is_list(Config) ->
+     {ClientNode, ServerNode, Hostname} = ssl_test_lib:run_where(Config),
+    
+     Ext = x509_test:extensions([{key_usage, [keyCertSign, cRLSign, digitalSignature, keyAgreement]}]),
+     ROOT = #{cert := Cert,
+              key := _Key} = public_key:pkix_test_root_cert("SERVER ROOT CA", [{key, ssl_test_lib:hardcode_rsa_key(6)},
+                                                                               {extensions, Ext}]),
+   
+    OtherSROOT = #{cert := OtherSCert,
+                  key := OtherSKey} = public_key:pkix_test_root_cert("OTHER SERVER ROOT CA", [{key, ssl_test_lib:hardcode_rsa_key(3)},
+                                                                                              {extensions, Ext}]),
+    OtherCROOT = #{cert := OtherCCert,
+                   key := _OtherCKey} = public_key:pkix_test_root_cert("OTHER Client ROOT CA", [{key, ssl_test_lib:hardcode_rsa_key(1)},
+                                                                                              {extensions, Ext}]),
+    
+    #{client_config := ClientConf} = public_key:pkix_test_data(#{server_chain => 
+                                                                     #{root => ROOT,
+                                                                       intermediates => [[{key, ssl_test_lib:hardcode_rsa_key(5)}]],
+                                                                       peer =>  [{key, ssl_test_lib:hardcode_rsa_key(4)}]},
+                                                                 client_chain => 
+                                                                     #{root => [{key, ssl_test_lib:hardcode_rsa_key(1)}], 
+                                                                       intermediates => [[{key, ssl_test_lib:hardcode_rsa_key(2)}]],
+                                                                       peer => [{key, ssl_test_lib:hardcode_rsa_key(3)}]}}
+                                                              ),
+    
+    #{server_config := OtherServerConf} = public_key:pkix_test_data(#{server_chain => 
+                                                                          #{root => OtherSROOT,
+                                                                            intermediates => [[{key, ssl_test_lib:hardcode_rsa_key(2)}]],
+                                                                            peer =>  [{key, ssl_test_lib:hardcode_rsa_key(1)}]},
+                                                                      client_chain => 
+                                                                          #{root => OtherCROOT,
+                                                                            intermediates => [[{key, ssl_test_lib:hardcode_rsa_key(2)}]],
+                                                                            peer => [{key, ssl_test_lib:hardcode_rsa_key(3)}]}}
+                                                                   ),
+    OTPCert = public_key:pkix_decode_cert(Cert, otp),
+    TBS = OTPCert#'OTPCertificate'.tbsCertificate,
+    TBSExt = TBS#'OTPTBSCertificate'.extensions,
+    AuthExt = #'AuthorityKeyIdentifier'{authorityCertIssuer = [{directoryName, TBS#'OTPTBSCertificate'.issuer}],
+                                        authorityCertSerialNumber = TBS#'OTPTBSCertificate'.serialNumber},
+    [AuthKeyExt] = x509_test:extensions([{?'id-ce-authorityKeyIdentifier',
+                                          AuthExt,
+                                          false}]),
+    
+    
+    CAs = proplists:get_value(cacerts, OtherServerConf),
+    
+    [ICA] = CAs -- [OtherSCert, OtherCCert],
+    
+    OTPICACert = public_key:pkix_decode_cert(ICA, otp),
+    ICATBS = OTPICACert#'OTPCertificate'.tbsCertificate,
+                                                                                              
+    FakeICA = public_key:pkix_sign(ICATBS#'OTPTBSCertificate'{extensions = [AuthKeyExt | TBSExt]}, OtherSKey),
+    
+    ServerCert = proplists:get_value(cert, OtherServerConf),
+    FakeServer = ssl_test_lib:start_server([{node, ServerNode}, {port, 0}, 
+                                            {from, self()}, 
+                                            {mfa, {ssl_test_lib, no_result, []}},
+                                            {options, [{cert, [ServerCert, FakeICA]} | 
+                                                       proplists:delete(cert, OtherServerConf)]
+                                            }]),
+    Port1 = ssl_test_lib:inet_port(FakeServer),
+    
+    Client1 = ssl_test_lib:start_client_error([{node, ClientNode}, {port, Port1}, 
+                                               {host, Hostname},
+                                               {from, self()}, 
+                                               {options, [{verify, verify_peer} | ClientConf]}]),
+    
+    ssl_test_lib:check_client_alert(Client1, bad_certificate).
 
 %%--------------------------------------------------------------------
-%% Internal functions ------------------------------------------------
+%% callback functions ------------------------------------------------
 %%--------------------------------------------------------------------
-send_recv_result(Socket) ->
-    ssl:send(Socket, "Hello world"),
-    {ok,"Hello world"} = ssl:recv(Socket, 11),
-    ok.
 tcp_send_recv_result(Socket) ->
     gen_tcp:send(Socket, "Hello world"),
     {ok,"Hello world"} = gen_tcp:recv(Socket, 11),
@@ -488,7 +764,9 @@ dummy(_Socket) ->
     %% Should not happen as the ssl connection will not be established
     %% due to fatal handshake failiure
     exit(kill).
-
+%%--------------------------------------------------------------------
+%% Internal functions ------------------------------------------------
+%%--------------------------------------------------------------------
 version_option_test(Config, Version) ->
     ClientOpts = ssl_test_lib:ssl_options(client_opts, Config),
     ServerOpts = ssl_test_lib:ssl_options(server_opts, Config),
@@ -525,3 +803,60 @@ remove_supported_versions(Available, Supported) ->
             Versions0
     end.
 
+
+test_fake_root(Hostname, ServerNode, ClientNode, ServerConf, ClientConf, FakeCert, FakeServerConf, ResultRootIncluded, ResultRootExcluded) ->
+    RealServer = ssl_test_lib:start_server([{node, ServerNode}, {port, 0}, 
+                                            {from, self()},
+                                            {mfa, {ssl_test_lib, send_recv_result_active, []}},
+                                             {options, ServerConf}]),
+    Port0 = ssl_test_lib:inet_port(RealServer),
+    Client0 = ssl_test_lib:start_client([{node, ClientNode}, {port, Port0}, 
+                                         {host, Hostname},
+                                          {mfa, {ssl_test_lib, send_recv_result_active, []}},
+                                         {from, self()}, 
+                                         {options, [{verify, verify_peer} | ClientConf]}]),
+    
+    ssl_test_lib:check_result(RealServer, ok, Client0, ok),
+    
+    ssl_test_lib:close(RealServer),
+    ssl_test_lib:close(Client0),
+    
+    %% Fake server sends ROOT cert
+    FakeServer = ssl_test_lib:start_server([{node, ServerNode}, {port, 0}, 
+                                            {from, self()}, 
+                                            {mfa, {ssl_test_lib, no_result, []}},
+                                            {options, FakeServerConf}]),
+    Port1 = ssl_test_lib:inet_port(FakeServer),
+    
+    Client1 = ssl_test_lib:start_client_error([{node, ClientNode}, {port, Port1}, 
+                                               {host, Hostname},
+                                               {from, self()}, 
+                                               {options, [{verify, verify_peer} | ClientConf]}]),
+    
+    ssl_test_lib:check_client_alert(Client1, ResultRootIncluded),
+   
+    
+    %%Fake server does not send ROOT cert
+    CAS0 = proplists:get_value(cacerts, FakeServerConf),
+    CAS1 = CAS0 -- [FakeCert],
+    
+    FakeServer1 = ssl_test_lib:start_server([{node, ServerNode}, {port, 0}, 
+                                             {from, self()}, 
+                                             {mfa, {ssl_test_lib, no_result, []}},                                             
+                                             {options, [{cacerts, CAS1} | proplists:delete(cacerts, FakeServerConf)]}]),
+    
+    Port2 = ssl_test_lib:inet_port(FakeServer1),
+    
+    Client2 = ssl_test_lib:start_client_error([{node, ClientNode}, {port, Port2}, 
+                                               {host, Hostname},
+                                              {from, self()}, 
+                                               {options, [{verify, verify_peer} | ClientConf]}]),
+    
+    ssl_test_lib:check_client_alert(Client2, ResultRootExcluded),
+    
+    ssl_test_lib:close(FakeServer1).
+
+
+
+    
+   

@@ -49,7 +49,8 @@
  * See the following message on how MAP_NORESERVE was treated on FreeBSD:
  * <http://lists.llvm.org/pipermail/cfe-commits/Week-of-Mon-20150202/122958.html>
  */
-#  if defined(MAP_FIXED) && (defined(MAP_NORESERVE) || defined(__FreeBSD__))
+#  if (defined(MAP_FIXED) && (defined(MAP_NORESERVE) || defined(__FreeBSD__)) \
+       && !defined(ADDRESS_SANITIZER))
 #    define ERTS_HAVE_OS_PHYSICAL_MEMORY_RESERVATION 1
 #  endif
 #endif
@@ -176,6 +177,11 @@ void hard_dbg_remove_mseg(void* seg, UWord sz);
 
 #endif /* HAVE_ERTS_MMAP */
 
+/* Marks the given memory region as permanently inaccessible.
+ *
+ * Returns 0 on success, and -1 on error. */
+int erts_mem_guard(void *p, UWord size);
+
 /* Marks the given memory region as unused without freeing it, letting the OS
  * reclaim its physical memory with the promise that we'll get it back (without
  * its contents) the next time it's accessed. */
@@ -203,7 +209,7 @@ ERTS_GLB_INLINE void erts_mem_discard(void *p, UWord size);
             data[i] = pattern[i % sizeof(pattern)];
         }
     }
-#elif defined(HAVE_SYS_MMAN_H) && !(defined(__sun) || defined(__sun__))
+#elif defined(HAVE_SYS_MMAN_H) && defined(HAVE_MADVISE) && !(defined(__sun) || defined(__sun__))
     #include <sys/mman.h>
 
     ERTS_GLB_INLINE void erts_mem_discard(void *ptr, UWord size) {
@@ -214,6 +220,12 @@ ERTS_GLB_INLINE void erts_mem_discard(void *p, UWord size);
     #else
         madvise(ptr, size, MADV_DONTNEED);
     #endif
+    }
+#elif defined(HAVE_SYS_MMAN_H) && defined(HAVE_POSIX_MADVISE) && !(defined(__sun) || defined(__sun__))
+    #include <sys/mman.h>
+
+    ERTS_GLB_INLINE void erts_mem_discard(void *ptr, UWord size) {
+        posix_madvise(ptr, size, POSIX_MADV_DONTNEED);
     }
 #elif defined(_WIN32)
     #include <winbase.h>

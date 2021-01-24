@@ -143,10 +143,10 @@ dyn_gethostbyname_r(const char *name, struct hostent *hostp, char **buffer_p,
 static void abort_connection(ei_socket_callbacks *cbs, void *ctx);
 static int close_connection(ei_socket_callbacks *cbs, void *ctx, int fd);
 
-static char *
+static const char *
 estr(int e)
 {
-    char *str = strerror(e);
+    const char *str = strerror(e);
     if (!str)
         return "unknown error";
     return str;
@@ -440,7 +440,7 @@ static ei_socket_info* get_ei_socket_info(int fd)
 
 static int remove_ei_socket_info(int fd)
 {
-    return put_ei_socket_info(fd, -1, NULL, NULL, NULL, NULL);
+    return put_ei_socket_info(fd, -1, null_cookie, NULL, NULL, NULL);
 }
 
 ei_cnode *ei_fd_to_cnode(int fd)
@@ -770,6 +770,8 @@ int ei_make_ref(ei_cnode *ec, erlang_ref *ref)
     ref->n[0] = ref_count[0];
     ref->n[1] = ref_count[1];
     ref->n[2] = ref_count[2];
+    ref->n[3] = 0;
+    ref->n[4] = 0;
     
     ref_count[0]++;
     ref_count[0] &= 0x3ffff;
@@ -1250,6 +1252,12 @@ static int ei_connect_helper(ei_cnode* ec,
 	EI_TRACE_ERR1("ei_xconnect","-> CONNECT remote version %d not compatible",
                       epmd_says_version);
 	return ERL_ERROR;
+    }
+
+    if (!ec->thisnodename[0] && epmd_says_version < EI_DIST_6) {
+        /* This is a dynamic node name. We have to use at least vsn 6
+           of the dist protocol for this to work. */
+        epmd_says_version = EI_DIST_6;
     }
 
     err = ei_socket_ctx__(cbs, &ctx, ec->setup_context);
@@ -2019,10 +2027,10 @@ static unsigned int gen_challenge(void)
     uname(&s.name);
     s.cpu  = clock();
     s.pid  = getpid();
-#ifndef __ANDROID__
-    s.hid  = gethostid();
-#else
+#if defined(__ANDROID__) || defined(__HAIKU__)
     s.hid  = 0;
+#else
+    s.hid  = gethostid();
 #endif
     s.uid  = getuid();
     s.gid  = getgid();
@@ -2254,7 +2262,8 @@ static DistFlags preferred_flags(void)
         | DFLAG_BIG_CREATION
         | DFLAG_EXPORT_PTR_TAG
         | DFLAG_BIT_BINARIES
-        | DFLAG_HANDSHAKE_23;
+        | DFLAG_HANDSHAKE_23
+        | DFLAG_V4_NC;
     if (ei_internal_use_21_bitstr_expfun()) {
         flags &= ~(DFLAG_EXPORT_PTR_TAG
                    | DFLAG_BIT_BINARIES);

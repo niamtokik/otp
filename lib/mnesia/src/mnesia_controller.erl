@@ -39,6 +39,7 @@
 %% We processes the load request queue as a "background" job..
 
 -module(mnesia_controller).
+-compile([{nowarn_deprecated_function, [{erlang,phash,2}]}]).
 
 -behaviour(gen_server).
 
@@ -1580,7 +1581,14 @@ initial_safe_loads() ->
     end.
 
 last_consistent_replica(Tab, Downs) ->
-    Cs = val({Tab, cstruct}),
+    case ?catch_val({Tab, cstruct}) of
+        #cstruct{} = Cs ->
+            last_consistent_replica(Cs, Tab, Downs);
+        _ ->
+            false
+    end.
+
+last_consistent_replica(Cs, Tab, Downs) ->
     Storage = mnesia_lib:cs_to_storage_type(node(), Cs),
     Ram = Cs#cstruct.ram_copies,
     Disc = Cs#cstruct.disc_copies,

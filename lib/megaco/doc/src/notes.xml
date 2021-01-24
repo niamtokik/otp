@@ -37,7 +37,71 @@
   section is the version number of Megaco.</p>
 
 
-  <section><title>Megaco 3.19.1</title>
+  <section><title>Megaco 3.19.5</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Fixed usage of <c>AC_CONFIG_AUX_DIRS()</c> macros in
+	    configure script sources.</p>
+          <p>
+	    Own Id: OTP-17093 Aux Id: ERL-1447, PR-2948 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Megaco 3.19.4</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Empty statistics descriptor (now) allowed in both encode
+	    and decode for version 3.</p>
+          <p>
+	    Own Id: OTP-17012 Aux Id: ERL-1405 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Megaco 3.19.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    The expected number of warnings when (yecc) generating v2
+	    and v3 (text) parser's was incorrect.</p>
+          <p>
+	    Own Id: OTP-16836</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Megaco 3.19.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    The v2 and v3 parsers could not properly decode some IPv6
+	    addresses.</p>
+          <p>
+	    Own Id: OTP-16818 Aux Id: ERIERL-526 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Megaco 3.19.1</title>
 
     <section><title>Fixed Bugs and Malfunctions</title>
       <list>
@@ -71,6 +135,38 @@
 	    to work until OTP 24.</p>
           <p>
 	    Own Id: OTP-16531</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+  <section><title>Megaco 3.18.8.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    Empty statistics descriptor (now) allowed in both encode
+	    and decode for version 3.</p>
+          <p>
+	    Own Id: OTP-17012 Aux Id: ERL-1405 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+  <section><title>Megaco 3.18.8.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+          <p>
+	    The v2 and v3 parsers could not properly decode some IPv6
+	    addresses.</p>
+          <p>
+	    Own Id: OTP-16818 Aux Id: ERIERL-526 </p>
         </item>
       </list>
     </section>

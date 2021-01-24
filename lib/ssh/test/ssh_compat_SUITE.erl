@@ -23,13 +23,29 @@
 -module(ssh_compat_SUITE).
 
 -include_lib("common_test/include/ct.hrl").
--include_lib("ssh/src/ssh_transport.hrl"). % #ssh_msg_kexinit{}
+-include("ssh_transport.hrl"). % #ssh_msg_kexinit{}
 -include_lib("kernel/include/inet.hrl"). % #hostent{}
 -include_lib("kernel/include/file.hrl"). % #file_info{}
 -include("ssh_test_lib.hrl").
 
-%% Note: This directive should only be used in test suites.
--compile(export_all).
+-export([
+         suite/0,
+         all/0,
+         groups/0,
+         init_per_suite/1,
+         end_per_suite/1,
+         init_per_group/2,
+         end_per_group/2
+        ]).
+
+-export([
+         all_algorithms_sftp_exec_reneg_otp_is_client/1,
+         check_docker_present/1,
+         login_otp_is_client/1,
+         login_otp_is_server/1,
+         renegotiation_otp_is_server/1,
+         send_recv_big_with_renegotiate_otp_is_client/1
+        ]).
 
 -define(USER,"sshtester").
 -define(PASSWD, "foobar").
@@ -53,7 +69,7 @@ groups() ->
                        send_recv_big_with_renegotiate_otp_is_client
                       ]},
      {otp_server, [], [login_otp_is_server,
-                       all_algorithms_sftp_exec_reneg_otp_is_server
+                       renegotiation_otp_is_server
                       ]} |
      [{G, [], [{group,otp_client}, {group,otp_server}]} || G <- ssh_image_versions()]
     ].
@@ -292,46 +308,57 @@ all_algorithms_sftp_exec_reneg_otp_is_client(Config) ->
                   end).
 
 %%--------------------------------------------------------------------
-all_algorithms_sftp_exec_reneg_otp_is_server(Config) ->
-    CommonAlgs = proplists:get_value(common_remote_client_algs, Config),
-    UserDir = setup_remote_priv_and_local_auth_keys('ssh-rsa', Config),
-    chk_all_algos(?FUNCTION_NAME, CommonAlgs, Config,
-                  fun(Tag,Alg) ->
-                          HostKeyAlg = case Tag of
-                                           public_key -> Alg;
-                                           _ -> 'ssh-rsa'
-                                       end,
-                          PrefAlgs =
-                              [{T,L} || {T,L} <- ssh_transport:supported_algorithms(),
-                                        T =/= Tag],
-                          SftpRootDir = new_dir(Config),
-                          %% ct:log("Rootdir = ~p",[SftpRootDir]),
-                          {Server, Host, HostPort} =
-                              ssh_test_lib:daemon(0,
-                                                  [{preferred_algorithms, [{Tag,[Alg]} | PrefAlgs]},
-                                                   {system_dir, setup_local_hostdir(HostKeyAlg, Config)},
-                                                   {user_dir, UserDir},
-                                                   {user_passwords, [{?USER,?PASSWD}]},
-                                                   {failfun, fun ssh_test_lib:failfun/2},
-                                                   {subsystems,
-                                                    [ssh_sftpd:subsystem_spec([{cwd,SftpRootDir},
-                                                                               {root,SftpRootDir}]),
-                                                     {"echo_10",{ssh_echo_server,[10,[{dbg,true}]]}}
-                                                    ]}
-                                                  ]),
-                          R = do([fun() ->
-                                          exec_from_docker(Config, Host, HostPort,
-                                                           "hi_there.\r\n",
-                                                           [<<"hi_there">>],
-                                                           "")
-                                  end,
-                                  fun() ->
-                                          sftp_tests_erl_server(Config, Host, HostPort, SftpRootDir, UserDir)
-                                  end
-                                 ]),
-                          ssh:stop_daemon(Server),
-                          R
-                  end).
+renegotiation_otp_is_server(Config) ->
+    PublicKeyAlgs = [A || {public_key,A} <- proplists:get_value(common_remote_client_algs, Config, [])],
+    UserDir = setup_remote_priv_and_local_auth_keys(hd(PublicKeyAlgs), Config),
+    SftpRootDir = new_dir(Config),
+    ct:log("Rootdir = ~p",[SftpRootDir]),
+    Parent = self(),
+    Ref = make_ref(),
+    {Server, Host, Port} =
+        ssh_test_lib:daemon(0,
+                            [{system_dir, setup_local_hostdir(Config)},
+                             {user_dir, UserDir},
+                             {user_passwords, [{?USER,?PASSWD}]},
+                             {failfun, fun ssh_test_lib:failfun/2},
+                             {connectfun,
+                              fun(_,_,_) ->
+                                      HostConnRef = self(),
+                                      reneg_tester(Parent, Ref, HostConnRef),
+                                      ct:log("Connected ~p",[HostConnRef]),
+                                      timer:sleep(1100), % Just a bit more than  1 s
+                                      ok
+                              end},
+                             {subsystems,
+                              [ssh_sftpd:subsystem_spec([{cwd,SftpRootDir},
+                                                         {root,SftpRootDir}])
+                              ]}
+                            ]),
+    case sftp_tests_erl_server(Config, Host, Port, SftpRootDir, UserDir, Ref) of
+        ok ->
+            ssh:stop_daemon(Server);
+        {error,Error} ->
+            ssh:stop_daemon(Server),
+            ct:log("Error: ~p", [Error]),
+            {fail, Error}
+    end.
+
+
+reneg_tester(Parent, Ref, HostConnRef) ->
+    spawn(fun() ->
+                  reneg_tester_loop(Parent, Ref, HostConnRef, renegotiate_test(init,HostConnRef))
+          end).
+                  
+reneg_tester_loop(Parent, Ref, HostConnRef, Kex1) ->  
+    case ssh_test_lib:get_kex_init(HostConnRef) of
+        Kex1 ->
+            timer:sleep(500),
+            reneg_tester_loop(Parent, Ref, HostConnRef, Kex1);
+        _OtherKex ->
+            ct:log("Kex is changed.", []),
+            Parent ! {kex_changed, Ref}
+    end.
+
 
 %%--------------------------------------------------------------------
 send_recv_big_with_renegotiate_otp_is_client(Config) ->
@@ -560,38 +587,26 @@ chk_all_algos(FunctionName, CommonAlgs, Config, DoTestFun) when is_function(DoTe
 
 
 
-%%%----------------------------------------------------------------
-%%%
-%%% Call all Funs as Fun() which returns 'ok', {ok,C} or Other.
-%%% do/1 returns 'ok' or the first encountered value that is not
-%%% successful.
-%%%
-
-do(Funs) ->
-    do(Funs, 1).
-
-do([Fun|Funs], N) ->
-    case Fun() of
-        ok ->
-            %% ct:log("Fun ~p ok",[N]),
-            do(Funs, N-1);
-        {ok,C} ->
-            %% ct:log("Fun ~p {ok,C}",[N]),
-            ssh:close(C),
-            do(Funs, N-1);
-        Other ->
-            ct:log("Fun ~p FAILED:~n~p",[N, Other]),
-            Other
-    end;
-
-do([], _) ->
-    %% ct:log("All Funs ok",[]),
-    ok.
-
 %%--------------------------------------------------------------------
 %%
 %% Functions to set up local and remote host's and user's keys and directories
 %% 
+
+setup_local_hostdir(Config) ->
+    KeyAlgs = lists:usort(
+                [A || From <- [common_remote_client_algs,
+                               common_remote_server_algs],
+                      {public_key,A} <- proplists:get_value(From, Config, [])]),
+    setup_local_hostdirs(KeyAlgs, new_dir(Config), Config).
+
+
+setup_local_hostdirs(KeyAlgs, HostDir, Config) ->
+    lists:foreach(
+      fun(KeyAlg) ->
+              setup_local_hostdir(KeyAlg, HostDir, Config)
+      end, KeyAlgs),
+    HostDir.
+
 
 setup_local_hostdir(KeyAlg, Config) ->
     setup_local_hostdir(KeyAlg, new_dir(Config), Config).
@@ -606,13 +621,6 @@ setup_local_hostdir(KeyAlg, HostDir, Config) ->
 
 setup_remote_auth_keys_and_local_priv(KeyAlg, Config) ->
     {IP,Port} = ip_port(Config),
-    setup_remote_auth_keys_and_local_priv(KeyAlg, IP, Port, new_dir(Config), Config).
-
-setup_remote_auth_keys_and_local_priv(KeyAlg, UserDir, Config) ->
-    {IP,Port} = ip_port(Config),
-    setup_remote_auth_keys_and_local_priv(KeyAlg, IP, Port, UserDir, Config).
-
-setup_remote_auth_keys_and_local_priv(KeyAlg, IP, Port, Config) ->
     setup_remote_auth_keys_and_local_priv(KeyAlg, IP, Port, new_dir(Config), Config).
 
 setup_remote_auth_keys_and_local_priv(KeyAlg, IP, Port, UserDir, Config) ->
@@ -640,13 +648,6 @@ setup_remote_auth_keys_and_local_priv(KeyAlg, IP, Port, UserDir, Config) ->
 
 setup_remote_priv_and_local_auth_keys(KeyAlg, Config) ->
     {IP,Port} = ip_port(Config),
-    setup_remote_priv_and_local_auth_keys(KeyAlg, IP, Port, new_dir(Config), Config).
-
-setup_remote_priv_and_local_auth_keys(KeyAlg, UserDir, Config) ->
-    {IP,Port} = ip_port(Config),
-    setup_remote_priv_and_local_auth_keys(KeyAlg, IP, Port, UserDir, Config).
-
-setup_remote_priv_and_local_auth_keys(KeyAlg, IP, Port, Config) ->
     setup_remote_priv_and_local_auth_keys(KeyAlg, IP, Port, new_dir(Config), Config).
 
 setup_remote_priv_and_local_auth_keys(KeyAlg, IP, Port, UserDir, Config) ->
@@ -805,11 +806,6 @@ ip_port(Config) ->
     {_Ver,{IP,Port},_} = proplists:get_value(id,Config),
     {IP,Port}.
 
-port_mapped_to(Id) ->
-    Cmnd = lists:concat(["docker ps --format \"{{.Ports}}\"  --filter id=",Id]),
-    [_, PortStr | _] = string:tokens(os:cmd(Cmnd), ":->/"),
-    list_to_integer(PortStr).
-
 ip(Id) ->
     Cmnd = lists:concat(["docker inspect --format='{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ",
 			 Id]),
@@ -848,29 +844,6 @@ new_dir(Config) ->
             timer:sleep(25),
             new_dir(Config)
     end.
-
-clear_dir(Dir) ->
-    delete_all_contents(Dir),
-    {ok,[]} = file:list_dir(Dir),
-    Dir.
-
-delete_all_contents(Dir) ->
-    {ok,Fs} = file:list_dir(Dir),
-    lists:map(fun(F0) ->
-                      F = filename:join(Dir, F0),
-                      case filelib:is_file(F) of
-                          true ->
-                              file:delete(F);
-                          false ->
-                              case filelib:is_dir(F) of
-                                  true ->
-                                      delete_all_contents(F),
-                                      file:del_dir(F);
-                                  false ->
-                                      ct:log("Neither file nor dir: ~p",[F])
-                              end
-                      end
-              end, Fs).
 
 %%--------------------------------------------------------------------
 %%
@@ -942,10 +915,6 @@ use_algorithms(RemoteHelloBin) ->
     ssh_transport:adjust_algs_for_peer_version(binary_to_list(RemoteHelloBin)++"\r\n",
                                                MyAlgos).
 
-
-alg_class_diff(Tag) ->
-    alg_diff(proplists:get_value(Tag, ssh:default_algorithms()),
-             proplists:get_value(Tag, ssh_transport:supported_algorithms())).
 
 alg_diff() ->
     alg_diff(ssh:default_algorithms(), ssh_transport:supported_algorithms()).
@@ -1126,14 +1095,18 @@ receive_kexinit(S, Ack) ->
 %%% Test of sftp from the OpenSSH client side
 %%%
 
-sftp_tests_erl_server(Config, ServerIP, ServerPort, ServerRootDir, UserDir) ->
+sftp_tests_erl_server(Config, ServerIP, ServerPort, ServerRootDir, UserDir, Ref) ->
     try
         Cmnds = prepare_local_directory(ServerRootDir),
-        call_sftp_in_docker(Config, ServerIP, ServerPort, Cmnds, UserDir),
-        check_local_directory(ServerRootDir)
+        case call_sftp_in_docker(Config, ServerIP, ServerPort, Cmnds, UserDir, Ref) of
+            ok ->
+                check_local_directory(ServerRootDir);
+            {error,Error} ->
+                {error,Error}
+        end
     catch
-        Class:Error:ST ->
-            {error, {Class,Error,ST}}
+        Class:Excep:ST ->
+            {error, {Class,Excep,ST}}
     end.
 
 
@@ -1206,8 +1179,9 @@ do_check_local_directory(ServerRootDir) ->
     end.
 
 
-call_sftp_in_docker(Config, ServerIP, ServerPort, Cmnds, UserDir) ->
+call_sftp_in_docker(Config, ServerIP, ServerPort, Cmnds, UserDir, Ref) ->
     {DockerIP,DockerPort} = ip_port(Config),
+    ct:log("Going to connect ~p:~p", [DockerIP, DockerPort]),
     {ok,C} = ssh:connect(DockerIP, DockerPort,
                          [{user,?USER},
                           {password,?PASSWD},
@@ -1225,7 +1199,7 @@ call_sftp_in_docker(Config, ServerIP, ServerPort, Cmnds, UserDir) ->
     PostExpectCmnds= [],
     ExpectCmnds = 
         PreExpectCmnds ++
-        ["expect \"sftp>\" {send \""++Cmnd++"\n\"}\n" || Cmnd <- Cmnds] ++
+        ["expect \"sftp>\" {sleep 1; send \""++Cmnd++"\n\"}\n" || Cmnd <- Cmnds] ++
         PostExpectCmnds,
     
     %% Make an commands file in the docker
@@ -1235,14 +1209,30 @@ call_sftp_in_docker(Config, ServerIP, ServerPort, Cmnds, UserDir) ->
 
     %% Call expect in the docker
     {ok, Ch1} = ssh_connection:session_channel(C, infinity),
-    Kex1 = renegotiate_test(init, C),
+    ct:log("Going to execute 'expect commands' in docker", []),
     success = ssh_connection:exec(C, Ch1, "expect commands", infinity),
+    ct:log("'expect commands' in docker executed!", []),
+    case recv_log_msgs(C, Ch1) of
+        ok ->
+            receive
+                {kex_changed, Ref} ->
+                    %% success
+                    ct:log("Kex changed",[]),
+                    ssh:close(C),
+                    ok
+            after
+                30000 ->
+                    %% failure
+                    ct:log("Kex NOT changed",[]),
+                    ssh:close(C),
+                    {error,"Kex NOT changed"}
+            end;
 
-    renegotiate_test(Kex1, C),
-    recv_log_msgs(C, Ch1),
+        {error,Error} ->
+            ssh:close(C),
+            {error,Error}
+    end.
 
-    %% Done.
-    ssh:close(C).
 
 recv_log_msgs(C, Ch) ->
     receive
@@ -1255,6 +1245,12 @@ recv_log_msgs(C, Ch) ->
         {ssh_cm,C,_Msg} ->
             %% ct:log("Got ~p",[_Msg]),
             recv_log_msgs(C, Ch)
+    after
+        30000 ->
+            %% failure
+            ct:log("Exec Channel ~p in ~p NOT closed properly", [Ch,C]),
+            ssh:close(C),
+            {error,"Exec channel NOT closed"}
     end.
 
 %%%----------------------------------------------------------------
@@ -1319,7 +1315,7 @@ one_test_erl_client(exec, Id, C) ->
         {eof,<<"Hi there\n">>} ->
             ok;
         Other ->
-            ct:pal("exec Got other ~p", [Other]),
+            ct:log("exec Got other ~p", [Other]),
             {error, {exec,Id,bad_msg,Other,undefined}}
     end;
 
@@ -1329,7 +1325,7 @@ one_test_erl_client(no_subsyst, Id, C) ->
         failure ->
             ok;
         Other ->
-            ct:pal("no_subsyst Got other ~p", [Other]),
+            ct:log("no_subsyst Got other ~p", [Other]),
             {error, {no_subsyst,Id,bad_ret,Other,undefined}}
     end;
 
@@ -1357,7 +1353,7 @@ one_test_erl_client(setenv, Id, C) ->
         {eof,Env} ->
             ok;
         Other ->
-            ct:pal("setenv Got other ~p", [Other]),
+            ct:log("setenv Got other ~p", [Other]),
             {error, {setenv,Id,bad_msg,Other,undefined}}
     end;
 

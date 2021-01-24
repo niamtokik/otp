@@ -28,7 +28,8 @@
          off_heap_values/1,keys/1,collisions/1,
          init_restart/1, put_erase_trapping/1,
          killed_while_trapping_put/1,
-         killed_while_trapping_erase/1]).
+         killed_while_trapping_erase/1,
+         error_info/1]).
 
 %%
 -export([test_init_restart_cmd/1]).
@@ -42,7 +43,8 @@ all() ->
      destruction,
      killed_while_trapping,off_heap_values,keys,collisions,
      init_restart, put_erase_trapping, killed_while_trapping_put,
-     killed_while_trapping_erase].
+     killed_while_trapping_erase,
+     error_info].
 
 init_per_suite(Config) ->
     erts_debug:set_internal_state(available_internal_state, true),
@@ -685,17 +687,46 @@ do_test_init_restart_cmd(File) ->
 %% and after each test case.
 
 chk() ->
-    {persistent_term:info(), persistent_term:get()}.
+    {xtra_info(), persistent_term:get()}.
 
-chk({Info, _Initial} = Chk) ->
-    Info = persistent_term:info(),
+chk({Info1, _Initial} = Chk) ->
+    #{count := Count, memory := Memory1, table := Table1} = Info1,
+    case xtra_info() of
+        Info1 ->
+            ok;
+        #{count := Count, memory := Memory2, table := Table2}=Info2
+          when Memory2 > Memory1,
+               Table2 > Table1 ->
+            %% Check increased memory is only table growth hysteresis
+            MemDiff = Memory2 - Memory1,
+            TabDiff = (Table2 - Table1) * erlang:system_info(wordsize),
+            {MemDiff,MemDiff} = {MemDiff, TabDiff},
+
+            case (Count / Table2) of
+                Load when Load >= 0.25 ->
+                    ok;
+                _ ->
+                    chk_fail("Hash table too large", Info1, Info2)
+            end;
+        Info2 ->
+            chk_fail("Memory diff", Info1, Info2)
+    end,
     Key = {?MODULE,?FUNCTION_NAME},
-    ok = persistent_term:put(Key, {term,Info}),
+    ok = persistent_term:put(Key, {term,Info1}),
     Term = persistent_term:get(Key),
     true = persistent_term:erase(Key),
     chk_not_stuck(Term, 1),
     [persistent_term:erase(K) || {K, _} <- pget(Chk)],
     ok.
+
+xtra_info() ->
+    maps:merge(persistent_term:info(),
+               erts_debug:get_internal_state(persistent_term)).
+
+chk_fail(Error, Info1, Info2) ->
+    io:format("Info1 = ~p\n", [Info1]),
+    io:format("Info2 = ~p\n", [Info2]),
+    ct:fail(Error).
 
 chk_not_stuck(Term, Timeout) ->
     %% Hash tables to be deleted are put onto a queue.
@@ -781,3 +812,87 @@ repeat(_Fun, 0) ->
 repeat(Fun, N) ->
     Fun(),
     repeat(Fun, N-1).
+
+error_info(_Config) ->
+    L = [{erase, [{?MODULE,my_key}], [no_fail]},
+         {get, [{?MODULE,certainly_not_existing}]},
+         {get, [{?MODULE,certainly_not_existing}, default], [no_fail]},
+         {put, 2}                               %Can't fail.
+        ],
+    do_error_info(L).
+
+do_error_info(L0) ->
+    L1 = lists:foldl(fun({_,A}, Acc) when is_integer(A) -> Acc;
+                        ({F,A}, Acc) -> [{F,A,[]}|Acc];
+                        ({F,A,Opts}, Acc) -> [{F,A,Opts}|Acc]
+                     end, [], L0),
+    Tests = ordsets:from_list([{F,length(A)} || {F,A,_} <- L1] ++
+                                  [{F,A} || {F,A} <- L0, is_integer(A)]),
+    Bifs0 = [{F,A} || {F,A} <- persistent_term:module_info(exports),
+                      A =/= 0,
+                      F =/= module_info],
+    Bifs = ordsets:from_list(Bifs0),
+    NYI = [{F,lists:duplicate(A, '*'),nyi} || {F,A} <- Bifs -- Tests],
+    L = lists:sort(NYI ++ L1),
+    do_error_info(L, []).
+
+do_error_info([{_,Args,nyi}=H|T], Errors) ->
+    case lists:all(fun(A) -> A =:= '*' end, Args) of
+        true ->
+            do_error_info(T, [{nyi,H}|Errors]);
+        false ->
+            do_error_info(T, [{bad_nyi,H}|Errors])
+    end;
+do_error_info([{F,Args,Opts}|T], Errors) ->
+    eval_bif_error(F, Args, Opts, T, Errors);
+do_error_info([], Errors0) ->
+    case lists:sort(Errors0) of
+        [] ->
+            ok;
+        [_|_]=Errors ->
+            io:format("\n~p\n", [Errors]),
+            ct:fail({length(Errors),errors})
+    end.
+
+eval_bif_error(F, Args, Opts, T, Errors0) ->
+    try apply(persistent_term, F, Args) of
+        Result ->
+            case lists:member(no_fail, Opts) of
+                true ->
+                    do_error_info(T, Errors0);
+                false ->
+                    do_error_info(T, [{should_fail,{F,Args},Result}|Errors0])
+            end
+    catch
+        error:Reason:Stk ->
+            SF = fun(Mod, _, _) -> Mod =:= test_server end,
+            Str = erl_error:format_exception(error, Reason, Stk, #{stack_trim_fun => SF}),
+            BinStr = iolist_to_binary(Str),
+            ArgStr = lists:join(", ", [io_lib:format("~p", [A]) || A <- Args]),
+            io:format("\nerlang:~p(~s)\n~ts", [F,ArgStr,BinStr]),
+
+            case Stk of
+                [{persistent_term,ActualF,ActualArgs,Info}|_] ->
+                    RE = <<"[*][*][*] argument \\d+:">>,
+                    Errors1 = case re:run(BinStr, RE, [{capture, none}]) of
+                                  match ->
+                                      Errors0;
+                                  nomatch when Reason =:= system_limit ->
+                                      Errors0;
+                                  nomatch ->
+                                      [{no_explanation,{F,Args},Info}|Errors0]
+                              end,
+
+                    Errors = case {ActualF,ActualArgs} of
+                                 {F,Args} ->
+                                     Errors1;
+                                 _ ->
+                                     [{renamed,{F,length(Args)},{ActualF,ActualArgs}}|Errors1]
+                             end,
+
+                    do_error_info(T, Errors);
+                _ ->
+                    Errors = [{renamed,{F,length(Args)},hd(Stk)}|Errors0],
+                    do_error_info(T, Errors)
+            end
+    end.

@@ -30,7 +30,11 @@
 -include("ssh_test_lib.hrl").
 
 %%% Test cases
--export([connectfun_disconnectfun_client/1, 
+-export([
+         auth_method_kb_interactive_data_tuple/1,
+         auth_method_kb_interactive_data_fun3/1,
+         auth_method_kb_interactive_data_fun4/1,
+         connectfun_disconnectfun_client/1, 
 	 disconnectfun_option_client/1, 
 	 disconnectfun_option_server/1, 
 	 id_string_no_opt_client/1, 
@@ -45,11 +49,14 @@
 	 max_sessions_sftp_start_channel_sequential/1, 
 	 max_sessions_ssh_connect_parallel/1, 
 	 max_sessions_ssh_connect_sequential/1, 
+         max_sessions_drops_tcp_connects/1,
+         max_sessions_drops_tcp_connects/0,
 	 server_password_option/1, 
 	 server_userpassword_option/1, 
 	 server_pwdfun_option/1,
 	 server_pwdfun_4_option/1,
 	 server_keyboard_interactive/1,
+	 server_keyboard_interactive_extra_msg/1,
 	 ssh_connect_arg4_timeout/1, 
 	 ssh_connect_negtimeout_parallel/1, 
 	 ssh_connect_negtimeout_sequential/1, 
@@ -62,7 +69,8 @@
 	 system_dir_option/1, 
 	 unexpectedfun_option_client/1, 
 	 unexpectedfun_option_server/1, 
-	 user_dir_option/1, 
+	 user_dir_option/1,
+	 user_dir_fun_option/1,
 	 connectfun_disconnectfun_server/1,
 	 hostkey_fingerprint_check/1,
 	 hostkey_fingerprint_check_md5/1,
@@ -72,6 +80,7 @@
 	 hostkey_fingerprint_check_sha512/1,
 	 hostkey_fingerprint_check_list/1,
          save_accepted_host_option/1,
+         raw_option/1,
          config_file/1,
          config_file_modify_algorithms_order/1
 	]).
@@ -82,7 +91,6 @@
 	 init_per_group/2, end_per_group/2, 
 	 init_per_testcase/2, end_per_testcase/2
 	]).
--compile(export_all).
 
 -define(NEWLINE, <<"\r\n">>).
 
@@ -102,6 +110,10 @@ all() ->
      server_pwdfun_option,
      server_pwdfun_4_option,
      server_keyboard_interactive,
+     server_keyboard_interactive_extra_msg,
+     auth_method_kb_interactive_data_tuple,
+     auth_method_kb_interactive_data_fun3,
+     auth_method_kb_interactive_data_fun4,
      {group, dir_options},
      ssh_connect_timeout,
      ssh_connect_arg4_timeout,
@@ -128,6 +140,7 @@ all() ->
      id_string_own_string_server_trail_space,
      id_string_random_server,
      save_accepted_host_option,
+     raw_option,
      config_file,
      config_file_modify_algorithms_order,
      {group, hardening_tests}
@@ -141,9 +154,11 @@ groups() ->
 			    max_sessions_ssh_connect_parallel,
 			    max_sessions_ssh_connect_sequential,
 			    max_sessions_sftp_start_channel_parallel,
-			    max_sessions_sftp_start_channel_sequential
+			    max_sessions_sftp_start_channel_sequential,
+                            max_sessions_drops_tcp_connects
 			   ]},
      {dir_options, [], [user_dir_option,
+                        user_dir_fun_option,
 			system_dir_option]}
     ].
 
@@ -385,7 +400,7 @@ server_pwdfun_4_option(Config) ->
 %%--------------------------------------------------------------------
 server_keyboard_interactive(Config) ->
     UserDir = proplists:get_value(user_dir, Config),
-    SysDir = proplists:get_value(data_dir, Config),	  
+    SysDir = proplists:get_value(data_dir, Config),
     %% Test that the state works
     Parent = self(),
     PWDFUN = fun("foo",P="bar",_,S) -> Parent!{P,S},true; 
@@ -440,7 +455,116 @@ server_keyboard_interactive(Config) ->
 		  end, [{"incorrect",undefined},
 			{"Bad again",1},
 			{"bar",2}]).
-			
+
+%%--------------------------------------------------------------------
+server_keyboard_interactive_extra_msg(Config) ->
+    UserDir = proplists:get_value(user_dir, Config),
+    SysDir = proplists:get_value(data_dir, Config),
+    {Pid, Host, Port} = ssh_test_lib:daemon([{system_dir, SysDir},
+					     {user_dir, UserDir},
+					     {auth_methods,"keyboard-interactive"},
+                                             {tstflg, [{one_empty,true}]},
+                                             {user_passwords, [{"foo","bar"}]}
+                                            ]),
+
+    ConnectionRef =
+	ssh_test_lib:connect(Host, Port, [{silently_accept_hosts, true},
+					  {user, "foo"},
+					  {password, "bar"},
+					  {user_dir, UserDir}]),
+    ssh:close(ConnectionRef),
+    ssh:stop_daemon(Pid).
+
+%%--------------------------------------------------------------------
+auth_method_kb_interactive_data_tuple(Config) ->
+    T = {"abc1", "def1", "ghi1: ", true},
+    amkid(Config, T, T).
+
+auth_method_kb_interactive_data_fun3(Config) ->
+    T = {"abc2", "def2", "ghi2: ", true},
+    amkid(Config, T,
+          fun(_Peer, _User, _Service) -> T end
+         ).
+
+auth_method_kb_interactive_data_fun4(Config) ->
+    T = {"abc3", "def3", "ghi3: ", true},
+    amkid(Config, T,
+          fun(_Peer, _User, _Service, _State) -> T end
+         ).
+
+amkid(Config, {ExpectName,ExpectInstr,ExpectPrompts,ExpectEcho}, OptVal) ->
+    UserDir = proplists:get_value(user_dir, Config),
+    SysDir = proplists:get_value(data_dir, Config),
+    %% Test that the state works
+    Parent = self(),
+    PWDFUN = fun("foo",P="bar",_,S) -> Parent!{P,S},true;
+		(_,P,_,S=undefined) -> Parent!{P,S},{false,1};
+		(_,P,_,S) -> Parent!{P,S},          {false,S+1}
+	     end,
+    {Pid, Host, Port} = ssh_test_lib:daemon([{system_dir, SysDir},
+					     {user_dir, UserDir},
+					     {auth_methods,"keyboard-interactive"},
+					     {pwdfun,PWDFUN},
+                                             {auth_method_kb_interactive_data,OptVal}
+                                            ]),
+
+    KIFFUN = fun(Name, Instr, PromptInfos) ->
+		     K={k,self()},
+                     Answer =
+                         case get(K) of
+                             undefined ->
+                                 put(K,1),
+                                 ["incorrect"];
+                             2 ->
+                                 put(K,3),
+                                 ["bar"];
+                             S->
+                                 put(K,S+1),
+                                 ["Bad again"]
+                         end,
+                     ct:log("keyboard_interact_fun:~n"
+                            " Name        = ~p~n"
+                            " Instruction = ~p~n"
+                            " Prompts     = ~p~n"
+                            "~nAnswer:~n  ~p~n",
+                            [Name, Instr, PromptInfos, Answer]),
+                     case {binary_to_list(Name),
+                           binary_to_list(Instr),
+                           [{binary_to_list(PI),Echo} || {PI,Echo} <- PromptInfos]
+                          } of
+                         {ExpectName, ExpectInstr, [{ExpectPrompts,ExpectEcho}]} ->
+                             ct:log("Match!", []),
+                             Answer;
+                         _ ->
+                             ct:log("Not match!~n"
+                                    " ExpectName        = ~p~n"
+                                    " ExpectInstruction = ~p~n"
+                                    " ExpectPrompts     = ~p~n",
+                                    [ExpectName, ExpectInstr, [{ExpectPrompts,ExpectEcho}]]),
+                             ct:fail("no_match")
+                     end
+	     end,
+    ssh_dbg:start(), ssh_dbg:on(authentication), %% Test dbg code
+    ConnectionRef2 =
+	ssh_test_lib:connect(Host, Port, [{silently_accept_hosts, true},
+					  {user, "foo"},
+					  {keyboard_interact_fun, KIFFUN},
+					  {user_dir, UserDir}]),
+    ssh_dbg:stop(),
+    ssh:close(ConnectionRef2),
+    ssh:stop_daemon(Pid),
+
+    lists:foreach(fun(Expect) ->
+			  receive
+			      Expect -> ok;
+			      Other -> ct:fail("Expect: ~p~nReceived ~p",[Expect,Other])
+			  after
+			      2000 -> ct:fail("Timeout expecting ~p",[Expect])
+			  end
+		  end, [{"incorrect",undefined},
+			{"Bad again",1},
+			{"bar",2}]).
+
 %%--------------------------------------------------------------------
 system_dir_option(Config) ->
     DirUnread = proplists:get_value(unreadable_dir,Config),
@@ -462,7 +586,7 @@ system_dir_option(Config) ->
 	    ct:fail("Didn't detect that option is a plain file", [])
     end.
 
-
+%%--------------------------------------------------------------------
 user_dir_option(Config) ->
     DirUnread = proplists:get_value(unreadable_dir,Config),
     FileRead = proplists:get_value(readable_file,Config),
@@ -482,6 +606,44 @@ user_dir_option(Config) ->
 	{error,econnrefused} ->
 	    ct:fail("Didn't detect that option is a plain file", [])
     end.
+
+%%--------------------------------------------------------------------
+user_dir_fun_option(Config) ->
+    DataDir = proplists:get_value(data_dir, Config),
+    PrivDir = proplists:get_value(priv_dir, Config),
+    SysDir = filename:join(PrivDir,"system"),
+    ssh_test_lib:setup_all_host_keys(DataDir, SysDir),
+    UserDir = filename:join(PrivDir,"user"),
+    ssh_test_lib:setup_all_user_keys(DataDir, UserDir),
+
+    Parent = self(),
+    Ref = make_ref(),
+    {Pid, Host, Port} = ssh_test_lib:daemon([{system_dir, SysDir},
+					     {user_dir_fun, fun(User) ->
+                                                                    ct:log("user_dir_fun called ~p",[User]),
+                                                                    Parent ! {user,Ref,User},
+                                                                    UserDir
+                                                            end},
+					     {failfun, fun ssh_test_lib:failfun/2}]),
+    _ConnectionRef =
+	ssh_test_lib:connect(Host, Port, [{silently_accept_hosts, true},
+					  {user, "foo"},
+					  {user_dir, UserDir},
+                                          {auth_methods,"publickey"},
+					  {user_interaction, false}]),
+    receive
+        {user,Ref,"foo"} ->
+            ssh:stop_daemon(Pid),
+            ok;
+        {user,Ref,What} ->
+            ssh:stop_daemon(Pid),
+            ct:log("Got ~p",[What]),
+            {fail, bad_userid}
+    after 2000 ->
+            ssh:stop_daemon(Pid),
+            {fail,timeout_in_receive}
+    end.
+
 
 %%--------------------------------------------------------------------
 %%% validate client that uses the 'ssh_msg_debug_fun' option
@@ -1035,7 +1197,7 @@ id_string_random_client(Config) ->
     receive
 	{id,Server,Id="SSH-2.0-Erlang"++_} ->
 	    ct:fail("Unexpected id: ~s.",[Id]);
-	{id,Server,Rnd="SSH-2.0-"++_} ->
+	{id,Server,Rnd="SSH-2.0-"++ID} when 4=<length(ID),length(ID)=<7 -> %% Add 2 for CRLF
 	    ct:log("Got correct ~s",[Rnd]);
 	{id,Server,Id} ->
 	    ct:fail("Unexpected id: ~s.",[Id])
@@ -1064,14 +1226,21 @@ id_string_own_string_server_trail_space(Config) ->
 
 %%--------------------------------------------------------------------
 id_string_random_server(Config) ->
-    {_Server, Host, Port} = ssh_test_lib:std_daemon(Config, [{id_string,random}]),
+    %% Check undocumented format of id_string. First a bad variant:
+    {error,{eoptions,_}} = ssh:daemon(0, [{id_string,{random,8,6}}]),
+    %% And then a correct one:
+    {_Server, Host, Port} = ssh_test_lib:std_daemon(Config, [{id_string,{random,6,8}}]),
     {ok,S1}=ssh_test_lib:gen_tcp_connect(Host,Port,[{active,false},{packet,line}]),
     {ok,"SSH-2.0-"++Rnd} = gen_tcp:recv(S1, 0, 2000),
     case Rnd of
 	"Erlang"++_ -> ct:log("Id=~p",[Rnd]),
 		       {fail,got_default_id};
 	"Olle\r\n" -> {fail,got_previous_tests_value};
-	_ -> ct:log("Got ~s.",[Rnd])
+	_ when 8=<length(Rnd),length(Rnd)=<10 -> %% Add 2 for CRLF
+	    ct:log("Got correct ~s",[Rnd]);
+	_ ->
+            ct:log("Got wrong sized ~s.",[Rnd]),
+            {fail,got_wrong_size}
     end.
 
 %%--------------------------------------------------------------------
@@ -1163,19 +1332,6 @@ one_shell_op(IO, TimeOut) ->
 
     IO ! {input, self(), "2*3*7.\r\n"},
     receive
-	Echo0 -> ct:log("Echo: ~p ~n", [Echo0])
-    after TimeOut -> ct:fail("Timeout waiting for echo")
-    end,
-
-    receive
-	?NEWLINE -> ct:log("NEWLINE received", [])
-    after TimeOut -> 
-	    receive Any1 -> ct:log("Bad NEWLINE: ~p",[Any1])
-	    after 0 -> ct:fail("Timeout waiting for NEWLINE")
-	    end
-    end,
-
-    receive
 	Result0 -> ct:log("Result: ~p~n", [Result0])
     after TimeOut ->  ct:fail("Timeout waiting for result")
     end.
@@ -1240,7 +1396,7 @@ max_sessions(Config, ParallelLogin, Connect0) when is_function(Connect0,2) ->
 	    ct:log("Connections up: ~p",[Connections]),
 	    [_|_] = Connections,
 
-	    %% Now try one more than alowed:
+	    %% N w try one more than alowed:
 	    ct:pal("Info Report expected here (if not disabled) ...",[]),
 	    try Connect(Host,Port)
 	    of
@@ -1289,6 +1445,89 @@ try_to_connect(Connect, Host, Port, Pid, Tref, N) ->
      end.
 
 %%--------------------------------------------------------------------
+max_sessions_drops_tcp_connects() ->
+    [{timetrap,{minutes,20}}].
+
+max_sessions_drops_tcp_connects(Config) ->
+    MaxSessions = 20,
+    UseSessions = 2, % Must be =< MaxSessions
+    FloodSessions = 1000,
+    ParallelLogin = true,
+    NegTimeOut = 8*1000,
+    HelloTimeOut = 1*1000,
+
+    %% Start a test daemon
+    SystemDir = filename:join(proplists:get_value(priv_dir, Config), system),
+    UserDir = proplists:get_value(priv_dir, Config),
+    {Pid, Host0, Port} =
+        ssh_test_lib:daemon([
+                             {system_dir, SystemDir},
+                             {user_dir, UserDir},
+                             {user_passwords, [{"carni", "meat"}]},
+                             {parallel_login, ParallelLogin},
+                             {hello_timeout, HelloTimeOut},
+                             {negotiation_timeout, NegTimeOut},
+                             {max_sessions, MaxSessions}
+                            ]),
+    Host = ssh_test_lib:mangle_connect_address(Host0),
+    ct:log("~p:~p ~p Listen ~p:~p for max ~p sessions. Mangled Host = ~p",
+           [?MODULE,?LINE,Pid,Host0,Port,MaxSessions,Host]),
+    
+    %% Log in UseSessions connections
+    SSHconnect = fun(N) ->
+                         R = ssh:connect(Host, Port, 
+                                         [{silently_accept_hosts, true},
+                                          {user_dir, proplists:get_value(priv_dir,Config)},
+                                          {user_interaction, false},
+                                          {user, "carni"},
+                                          {password, "meat"}
+                                         ]),
+                         ct:log("~p:~p ~p: ssh:connect -> ~p", [?MODULE,?LINE,N,R]),
+                         R
+                 end,
+
+    L1 = oks([SSHconnect(N) || N <- lists:seq(1,UseSessions)]),
+    case length(L1) of
+        UseSessions ->
+            %% As expected
+            %% Try gen_tcp:connect
+            [ct:log("~p:~p ~p: gen_tcp:connect -> ~p", 
+                    [?MODULE,?LINE, N, gen_tcp:connect(Host, Port, [])])
+             || N <- lists:seq(UseSessions+1, MaxSessions)
+            ],
+
+            ct:log("~p:~p Now try ~p gen_tcp:connect to be rejected", [?MODULE,?LINE,FloodSessions]),
+            [ct:log("~p:~p ~p: gen_tcp:connect -> ~p", 
+                    [?MODULE,?LINE, N, gen_tcp:connect(Host, Port, [])])
+             || N <- lists:seq(MaxSessions+1, MaxSessions+1+FloodSessions)
+            ],
+            
+            ct:log("~p:~p try ~p ssh:connect", [?MODULE,?LINE, MaxSessions - UseSessions]),
+            try_ssh_connect(MaxSessions - UseSessions, NegTimeOut, SSHconnect);
+
+        Len1 ->
+            {fail, Len1}
+    end.
+
+try_ssh_connect(N, NegTimeOut, F) when N>0 ->
+    case F(N) of
+        {ok,_} ->
+            try_ssh_connect(N-1, NegTimeOut, F);
+        {error,_} when N==1 ->
+            try_ssh_connect(N, NegTimeOut, F);
+        {error,_} ->
+            timer:sleep(NegTimeOut),
+            try_ssh_connect(N, NegTimeOut, F)
+    end;
+try_ssh_connect(_N, _NegTimeOut, _F) ->
+    done.
+
+
+oks(L) -> lists:filter(fun({ok,_}) -> true;
+                          (_) -> false
+                       end, L).
+    
+%%--------------------------------------------------------------------
 save_accepted_host_option(Config) ->
     UserDir = proplists:get_value(user_dir, Config),
     KnownHosts = filename:join(UserDir, "known_hosts"),
@@ -1316,12 +1555,18 @@ save_accepted_host_option(Config) ->
     ssh:stop_daemon(Pid).
 
 %%--------------------------------------------------------------------
+raw_option(_Config) ->
+    Opts = [{raw,1,2,3,4}],
+    #{socket_options := Opts} = ssh_options:handle_options(client, Opts),
+    #{socket_options := Opts} = ssh_options:handle_options(server, Opts).
+
+%%--------------------------------------------------------------------
 config_file(Config) ->
     %% First find common algs:
     ServerAlgs = ssh_test_lib:default_algorithms(sshd),
     OurAlgs = ssh_transport:supported_algorithms(), % Incl disabled but supported
     CommonAlgs = ssh_test_lib:intersection(ServerAlgs, OurAlgs),
-    ct:log("ServerAlgs =~n~p~n~nOurAlgs =~n~p~n~nCommonAlgs =~n~p",[ServerAlgs,OurAlgs,CommonAlgs]),
+    ct:log("ServerAlgs =~n~p~n~nOurAlgs =~n~p~n~nCommonAlgs =~n~p",[ServerAlgs,OurAlgs,CommonAlgs]),   
     Nkex = length(proplists:get_value(kex, CommonAlgs, [])),
 
     case {ServerAlgs, ssh_test_lib:some_empty(CommonAlgs)} of
@@ -1377,7 +1622,10 @@ config_file(Config) ->
                       {_,[Ch1]}]} | _] = R1,
 
             %% First connection. The client_options should be applied:
-            {ok,C1} = rpc:call(Node, ssh, connect, [loopback, 22, []]),
+            {ok,C1} = rpc:call(Node, ssh, connect, [loopback, 22, [{silently_accept_hosts, true},
+                                                                   {user_interaction, false}
+                                                                  ]]),
+            ct:log("C1 = ~n~p", [C1]),
             {algorithms,As1} = rpc:call(Node, ssh, connection_info, [C1, algorithms]),
             K1b = proplists:get_value(kex, As1),
             Ch1 = proplists:get_value(encrypt, As1),
@@ -1387,7 +1635,10 @@ config_file(Config) ->
 
             %% Second connection, the Options take precedence:
             C2_Opts = [{modify_algorithms,[{rm,[{kex,[K1b]}]}, % N.B.
-                                           {append, [{kex,[K2a]}]}]}],
+                                           {append, [{kex,[K2a]}]}]},
+                       {silently_accept_hosts, true},
+                       {user_interaction, false}
+                      ],
             {ok,C2} = rpc:call(Node, ssh, connect, [loopback, 22, C2_Opts]),
             {algorithms,As2} = rpc:call(Node, ssh, connection_info, [C2, algorithms]),
             K2a = proplists:get_value(kex, As2),

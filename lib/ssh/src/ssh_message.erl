@@ -366,13 +366,25 @@ decode(<<?BYTE(?SSH_MSG_CHANNEL_CLOSE),  ?UINT32(Recipient)>>) ->
        recipient_channel = Recipient
       };
 decode(<<?BYTE(?SSH_MSG_CHANNEL_REQUEST), ?UINT32(Recipient),
-	 ?DEC_BIN(RequestType,__0), ?BYTE(Bool), Data/binary>>) ->
-    #ssh_msg_channel_request{
-       recipient_channel = Recipient,
-       request_type = ?unicode_list(RequestType),
-       want_reply = erl_boolean(Bool),
-       data  = Data
-      };
+	 ?DEC_BIN(RequestType,__0), ?BYTE(Bool), Data/binary>>=Bytes) ->
+    try
+        #ssh_msg_channel_request{
+           recipient_channel = Recipient,
+           request_type = ?unicode_list(RequestType),
+           want_reply = erl_boolean(Bool),
+           data  = Data
+          }
+    catch _:_ ->
+            %% Faulty, RFC4254 says:
+            %% "If the request is not recognized or is not
+            %% supported for the channel, SSH_MSG_CHANNEL_FAILURE is returned."
+            %% So we provoke such a message to be sent
+            #ssh_msg_channel_request{
+               recipient_channel = Recipient,
+               request_type = faulty_msg,
+               data = Bytes
+              }
+    end;
 decode(<<?BYTE(?SSH_MSG_CHANNEL_SUCCESS),  ?UINT32(Recipient)>>) ->
     #ssh_msg_channel_success{
        recipient_channel = Recipient
@@ -684,11 +696,17 @@ bin_foldr(Fun, Acc, Bin) ->
 
 bin_foldl(_, Acc, <<>>) -> Acc;
 bin_foldl(Fun, Acc0, Bin0) ->
-    {Bin,Acc} = Fun(Bin0,Acc0),
-    bin_foldl(Fun, Acc, Bin).
+    case Fun(Bin0,Acc0) of
+        {Bin0,Acc0} ->
+            Acc0;
+        {Bin,Acc} ->
+            bin_foldl(Fun, Acc, Bin)
+    end.
 
 %%%----------------------------------------------------------------
 decode_keyboard_interactive_prompts(<<>>, Acc) ->
+    lists:reverse(Acc);
+decode_keyboard_interactive_prompts(<<0>>, Acc) ->
     lists:reverse(Acc);
 decode_keyboard_interactive_prompts(<<?DEC_BIN(Prompt,__0), ?BYTE(Bool), Bin/binary>>,
 				    Acc) ->
@@ -770,7 +788,35 @@ ssh_dbg_format(ssh_messages, {call, {?MODULE,decode,[_]}}) ->
 ssh_dbg_format(ssh_messages, {return_from,{?MODULE,decode,1},Msg}) ->
     Name = string:to_upper(atom_to_list(element(1,Msg))),
     ["Received ",Name,":\n",
-     wr_record(ssh_dbg:shrink_bin(Msg))
+     wr_record(ssh_dbg:shrink_bin(Msg)),
+     case Msg of
+         #ssh_msg_userauth_request{service = "ssh-connection",
+                                   method = "publickey",
+                                   data = <<_,?DEC_BIN(Alg,__0),_/binary>>} ->
+             io_lib:format("  data decoded: ~s ... ~n", [Alg]);
+
+         #ssh_msg_channel_request{request_type = "env",
+                                  data = <<?DEC_BIN(Var,__0),?DEC_BIN(Val,__1)>>} ->
+             io_lib:format("  data decoded: ~s = ~s~n", [Var, Val]);
+
+         #ssh_msg_channel_request{request_type = "exec",
+                                  data = <<?DEC_BIN(Cmnd,__0)>>} ->
+             io_lib:format("  data decoded: ~s~n", [Cmnd]);
+
+         #ssh_msg_channel_request{request_type = "pty-req",
+                                  data = <<?DEC_BIN(BTermName,_TermLen),
+                                           ?UINT32(Width),?UINT32(Height),
+                                           ?UINT32(PixWidth), ?UINT32(PixHeight),
+                                           Modes/binary>>} ->
+             io_lib:format("  data decoded: terminal = ~s~n"
+                           "                width x height = ~p x ~p~n"
+                           "                pix-width x pix-height = ~p x ~p~n"
+                           "                pty-opts = ~p~n",
+                           [BTermName, Width,Height, PixWidth, PixHeight,
+                            ssh_connection:decode_pty_opts(Modes)]);
+         _ ->
+             ""
+     end
     ];
 
 ssh_dbg_format(raw_messages, {call,{?MODULE,decode,[BytesPT]}}) ->

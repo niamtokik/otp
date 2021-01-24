@@ -18,11 +18,6 @@
  * %CopyrightEnd%
  */
 
-/*
- * This is a C version of the erl.exec Bourne shell script, including
- * additions required for Windows NT.
- */
-
 #include "etc_common.h"
 
 #include "erl_driver.h"
@@ -70,7 +65,6 @@ static const char plusM_au_allocs[]= {
     'R',	/* driver_alloc		*/
     'S',	/* sl_alloc		*/
     'T',	/* temp_alloc		*/
-    'X',	/* exec_alloc		*/
     'Z',        /* test_alloc           */
     '\0'
 };
@@ -83,6 +77,7 @@ static char *plusM_au_alloc_switches[] = {
     "acul",
     "acnl",
     "acfml",
+    "cp",
     "e",
     "t",
     "lmbcs",
@@ -186,7 +181,7 @@ static char *plusz_val_switches[] = {
 #define sleep(seconds) Sleep(seconds*1000)
 #endif
 
-#define SMP_SUFFIX	  ".smp"
+#define DEFAULT_SUFFIX	  "smp"
 
 void usage(const char *switchname);
 static void usage_format(char *format, ...);
@@ -245,8 +240,8 @@ static int verbose = 0;		/* If non-zero, print some extra information. */
 static int start_detached = 0;	/* If non-zero, the emulator should be
 				 * started detached (in the background).
 				 */
-static int start_smp_emu = 1;   /* Start the smp emulator. */
-static const char* emu_type = 0; /* Type of emulator (lcnt, valgrind, etc) */
+static const char* emu_type = NULL; /* Type of emulator (lcnt, valgrind, etc) */
+static const char* emu_flavor = DEFAULT_SUFFIX; /* Flavor of emulator (smp, jit or emu) */
 
 #ifdef __WIN32__
 static char *start_emulator_program = NULL; /* For detached mode -
@@ -381,9 +376,10 @@ add_extra_suffixes(char *prog)
        p = write_str(p, ".");
        p = write_str(p, emu_type);
    }
-   if (start_smp_emu) {
-       p = write_str(p, SMP_SUFFIX);
-   }
+
+   p = write_str(p, ".");
+   p = write_str(p, emu_flavor);
+
 #ifdef __WIN32__
    if (dll) {
        p = write_str(p, DLL_EXT);
@@ -422,7 +418,6 @@ int main(int argc, char **argv)
     int i;
     char* s;
     char *epmd_prog = NULL;
-    char *malloc_lib;
     int process_args = 1;
     int print_args_exit = 0;
     int print_qouted_cmd_exit = 0;
@@ -489,21 +484,8 @@ int main(int argc, char **argv)
 #endif
 
     /* We need to do this before the ordinary processing. */
-    malloc_lib = get_env("ERL_MALLOC_LIB");
     while (i < argc) {
-	if (argv[i][0] == '+') {
-	    if (argv[i][1] == 'M' && argv[i][2] == 'Y' && argv[i][3] == 'm') {
-		if (argv[i][4] == '\0') {
-		    if (++i < argc)
-			malloc_lib = argv[i];
-		    else
-			usage("+MYm");
-		}
-		else
-		    malloc_lib = &argv[i][4];
-	    }
-	}
-	else if (argv[i][0] == '-') {
+	if (argv[i][0] == '-') {
 	    if (strcmp(argv[i], "-smp") == 0) {
 		if (i + 1 >= argc)
 		    goto smp;
@@ -536,15 +518,17 @@ int main(int argc, char **argv)
                 }
                 emu_type = argv[i+1];
                 i++;
+	    } else if (strcmp(argv[i], "-emu_flavor") == 0) {
+		if (i + 1 >= argc) {
+                    usage(argv[i]);
+                }
+                emu_flavor = argv[i+1];
+                i++;
 	    }
 	}
 	i++;
     }
 
-    if (malloc_lib) {
-	if (strcmp(malloc_lib, "libc") != 0)
-	    usage("+MYm");
-    }
     emu = add_extra_suffixes(emu);
     emu_name = strsave(emu);
     erts_snprintf(tmpStr, sizeof(tmpStr), "%s" DIRSEP "%s" BINARY_EXT, bindir, emu);
@@ -662,6 +646,16 @@ int main(int argc, char **argv)
                         } while ((i+1) < argc && argv[i+1][0] != '-' && argv[i+1][0] != '+');
 		    }
 #endif
+                    else if (strcmp(argv[i], "-configfd") == 0) {
+                        if (i+1 >= argc)
+ 			    usage("-configfd");
+                        if ( strcmp(argv[i+1], "0") != 0 ) {
+			    add_arg(argv[i]);
+                        } else {
+                            add_args("-noshell", "-noinput", NULL);
+                            add_arg(argv[i]);
+                        }
+		    }
 		    else {
 			add_arg(argv[i]);
 		    }
@@ -867,6 +861,15 @@ int main(int argc, char **argv)
                           break;
                       }
                       usage(argv[i]);
+                      break;
+                  case 'J':
+                      if (i + 1 >= argc) {
+                          usage(argv[i]);
+                      }
+                      argv[i][0] = '-';
+                      add_Eargs(argv[i]);
+                      add_Eargs(argv[i+1]);
+                      i++;
                       break;
 		  case 'S':
 		      if (argv[i][2] == 'P') {
@@ -1178,7 +1181,35 @@ int main(int argc, char **argv)
 	execv(emu, Eargsp);
     }
     if (errno == ENOENT) {
-        error("The emulator \'%s\' does not exist.", emu);
+        if (strcmp(emu_flavor,DEFAULT_SUFFIX) || emu_type) {
+            /* The executable did not exist and a flavor/type flags was given.
+             * We collect the possible combinations and print that in the error
+             * in order to help the user.
+             */
+            char buff[255], *currbuff = buff;
+            DIR *dp = opendir(bindir);
+            if (dp) {
+                struct dirent *ep;
+                while ((ep = readdir(dp)) != NULL) {
+                    if (strncmp("beam",ep->d_name,4) == 0) {
+                        char *type = strstr(ep->d_name,".") + 1;
+                        char *flavor = strstr(type,".");
+                        currbuff += sprintf(currbuff,"\n  ");
+                        if (flavor == NULL) {
+                            flavor = type;
+                        } else {
+                            currbuff += sprintf(currbuff,"-emu_type %s ", strndup(type,flavor - type));
+                            flavor++;
+                        }
+                        currbuff += sprintf(currbuff,"-emu_flavor %s", flavor);
+                    }
+                }
+                closedir(dp);
+            }
+            error("Invalid emulator type or flavor. Available combinations are: %s\n",buff);
+        } else {
+            error("The emulator \'%s\' does not exist.");
+        }
     } else {
         error("Error %d executing \'%s\'.", errno, emu);
     }
@@ -1197,11 +1228,13 @@ usage_aux(void)
 	  "[-start_erl [datafile]] "
 #endif
 	  "[-make] [-man [manopts] MANPAGE] [-x] [-emu_args] [-start_epmd BOOLEAN] "
+          "[-emu_type TYPE] [-emu_flavor FLAVOR] "
 	  "[-args_file FILENAME] [+A THREADS] [+a SIZE] [+B[c|d|i]] [+c [BOOLEAN]] "
-	  "[+C MODE] [+h HEAP_SIZE_OPTION] [+K BOOLEAN] "
-	  "[+l] [+M<SUBSWITCH> <ARGUMENT>] [+P MAX_PROCS] [+Q MAX_PORTS] "
+	  "[+C MODE] [+dcg DECENTRALIZED_COUNTER_GROUPS_LIMIT] [+h HEAP_SIZE_OPTION] "
+          "[+J[Pperf] JIT_OPTION] "
+	  "[+M<SUBSWITCH> <ARGUMENT>] [+P MAX_PROCS] [+Q MAX_PORTS] "
 	  "[+R COMPAT_REL] "
-	  "[+r] [+rg READER_GROUPS_LIMIT] [+s SCHEDULER_OPTION] "
+	  "[+r] [+rg READER_GROUPS_LIMIT] [+s<SUBSWITCH> SCHEDULER_OPTION] "
 	  "[+S NO_SCHEDULERS:NO_SCHEDULERS_ONLINE] "
 	  "[+SP PERCENTAGE_SCHEDULERS:PERCENTAGE_SCHEDULERS_ONLINE] "
 	  "[+T LEVEL] [+V] [+v] "
@@ -1825,10 +1858,10 @@ done:
 #undef ENSURE
 }
 
-static char *
+static const char *
 errno_string(void)
 {
-    char *str = strerror(errno);
+    const char *str = strerror(errno);
     if (!str)
 	return "unknown error";
     return str;
@@ -1850,8 +1883,18 @@ read_args_file(char *filename)
 	file = fopen(filename, "r");
     } while (!file && errno == EINTR);
     if (!file) {
-	usage_format("Failed to open arguments file \"%s\": %s\n",
+#ifdef __WIN32__
+        char cwd[MAX_PATH];
+        if (_getcwd(cwd, sizeof(cwd)) == NULL) {
+#else
+        char cwd[PATH_MAX];
+        if (getcwd(cwd, sizeof(cwd)) == NULL) {
+#endif
+            cwd[0] = '\0';
+        }
+	usage_format("Failed to open arguments file \"%s\" at \"%s\": %s\n",
 		     filename,
+             cwd,
 		     errno_string());
     }
 

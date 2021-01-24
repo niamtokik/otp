@@ -75,7 +75,7 @@
          system_limit/1,
          hopefull_data_encoding/1,
          hopefull_export_fun_bug/1,
-         mk_hopefull_data/0]).
+         huge_iovec/1]).
 
 %% Internal exports.
 -export([sender/3, receiver2/2, dummy_waiter/0, dead_process/0,
@@ -105,7 +105,8 @@ all() ->
      {group, message_latency},
      {group, bad_dist}, {group, bad_dist_ext},
      start_epmd_false, epmd_module, system_limit,
-     hopefull_data_encoding, hopefull_export_fun_bug].
+     hopefull_data_encoding, hopefull_export_fun_bug,
+     huge_iovec].
 
 groups() ->
     [{bulk_send, [], [bulk_send_small, bulk_send_big, bulk_send_bigbig]},
@@ -1516,17 +1517,18 @@ measure_latency_large_message(Nodename, DataFun) ->
 
 measure_latency(DataFun, Dropper, Echo, Payload) ->
 
+    TCProc = self(),
+
     flush(),
 
     Senders = [spawn_monitor(
                  fun F() ->
                          DataFun(Dropper, Payload),
-                         receive
-                             die -> ok
-                         after 0 ->
-                                 F()
-                         end
+                         F()
                  end) || _ <- lists:seq(1,2)],
+
+    %% Link in order to cleanup properly if TC crashes
+    [link(Sender) || {Sender,_} <- Senders],
 
     wait_for_busy_dist(2 * 60 * 1000, 10),
 
@@ -1544,7 +1546,8 @@ measure_latency(DataFun, Dropper, Echo, Payload) ->
     ct:pal("Times: Avg: ~p Max: ~p Min: ~p Var: ~p",
            [Avg, lists:max(Times), lists:min(Times), StdDev]),
     [begin
-         Sender ! die,
+         unlink(Sender),
+         exit(Sender,die),
          receive
              {'DOWN', Ref, process, _, _} ->
                  ok
@@ -2600,7 +2603,6 @@ test_hopefull_data_encoding(Config, Fallback) when is_list(Config) ->
             false = rpc:call(BouncerNode, erts_debug, set_internal_state,
                             [remove_hopefull_dflags, true])
     end,
-    HData = mk_hopefull_data(),
     Tester = self(),
     R1 = make_ref(),
     R2 = make_ref(),
@@ -2609,10 +2611,13 @@ test_hopefull_data_encoding(Config, Fallback) when is_list(Config) ->
     Proxy = spawn_link(ProxyNode,
                        fun () ->
                                register(bouncer, self()),
+                               %% We create the data on the proxy node in order
+                               %% to create the correct sub binaries
+                               HData = mk_hopefull_data(R1, Tester),
                                %% Verify same result between this node and tester
                                Tester ! [R1, HData],
                                %% Test when connection has not been setup yet
-                               Bouncer ! {Tester, [R2, HData]}, 
+                               Bouncer ! {Tester, [R2, HData]},
                                Sync = make_ref(),
                                Bouncer ! {self(), Sync},
                                receive Sync -> ok end,
@@ -2620,17 +2625,18 @@ test_hopefull_data_encoding(Config, Fallback) when is_list(Config) ->
                                Bouncer ! {Tester, [R3, HData]},
                                receive after infinity -> ok end
                        end),
-    receive
-        [R1, HData1] ->
-            Hdata = HData1
-    end,
+    HData =
+        receive
+            [R1, HData1] ->
+                HData1
+        end,
     receive
         [R2, HData2] ->
             case Fallback of
                 false ->
                     HData = HData2;
                 true ->
-                    check_hopefull_fallback_data(Hdata, HData2)
+                    check_hopefull_fallback_data(HData, HData2)
             end
     end,
     receive
@@ -2639,7 +2645,7 @@ test_hopefull_data_encoding(Config, Fallback) when is_list(Config) ->
                 false ->
                     HData = HData3;
                 true ->
-                    check_hopefull_fallback_data(Hdata, HData3)
+                    check_hopefull_fallback_data(HData, HData3)
             end
     end,
     unlink(Proxy),
@@ -2657,32 +2663,54 @@ bounce_loop() ->
     end,
     bounce_loop().
 
-mk_hopefull_data() ->
+mk_hopefull_data(RemoteRef, RemotePid) ->
     HugeBs = list_to_bitstring([lists:duplicate(12*1024*1024, 85), <<6:6>>]),
     <<_:1/bitstring,HugeBs2/bitstring>> = HugeBs,
-    lists:flatten([mk_hopefull_data(list_to_binary(lists:seq(1,255))),
-                   1234567890, HugeBs, fun gurka:banan/3, fun erlang:node/1,
-                   self(), fun erlang:self/0,
-                   mk_hopefull_data(list_to_binary(lists:seq(1,32))), an_atom,
-                   fun lists:reverse/1, make_ref(), HugeBs2,
-                   fun blipp:blapp/7]).
+    mk_hopefull_data(list_to_binary(lists:seq(1,255))) ++
+        [1234567890, HugeBs, fun gurka:banan/3, fun erlang:node/1,
+         RemotePid, self(), fun erlang:self/0] ++
+        mk_hopefull_data(list_to_binary(lists:seq(1,32))) ++
+        [an_atom,
+         fun lists:reverse/1, RemoteRef, make_ref(), HugeBs2,
+         fun blipp:blapp/7].
 
 mk_hopefull_data(BS) ->
     BSsz = bit_size(BS),
-    [lists:map(fun (Offset) ->
-                       <<_:Offset/bitstring, NewBs/bitstring>> = BS,
-                       NewBs
-               end, lists:seq(1, 16)),
-     lists:map(fun (Offset) ->
-                       <<NewBs:Offset/bitstring, _/bitstring>> = BS,
-                       NewBs
-               end, lists:seq(BSsz-16, BSsz-1)),
-     lists:map(fun (Offset) ->
-                       PreOffset = Offset rem 16,
-                       <<_:PreOffset/bitstring, NewBs:Offset/bitstring, _/bitstring>> = BS,
-                       NewBs
-               end, lists:seq(BSsz-32, BSsz-17))].
-    
+    lists:concat(
+      [lists:map(fun (Offset) ->
+                         <<NewBs:Offset/bitstring, _/bitstring>> = BS,
+                         NewBs
+                 end, lists:seq(1, 16)),
+       lists:map(fun (Offset) ->
+                         <<_:Offset/bitstring, NewBs/bitstring>> = BS,
+                         NewBs
+                 end, lists:seq(1, 16)),
+       lists:map(fun (Offset) ->
+                         <<NewBs:Offset/bitstring, _/bitstring>> = BS,
+                         NewBs
+                 end, lists:seq(BSsz-16, BSsz-1)),
+       lists:map(fun (Offset) ->
+                         PreOffset = Offset rem 16,
+                         <<_:PreOffset/bitstring, NewBs:Offset/bitstring, _/bitstring>> = BS,
+                         NewBs
+                 end, lists:seq(BSsz-32, BSsz-17)),
+       lists:map(fun (Offset) ->
+                         <<NewBs:Offset/bitstring, _/bitstring>> = BS,
+                         [NewBs]
+                 end, lists:seq(1, 16)),
+       lists:map(fun (Offset) ->
+                         <<_:Offset/bitstring, NewBs/bitstring>> = BS,
+                         [NewBs]
+                 end, lists:seq(1, 16)),
+       lists:map(fun (Offset) ->
+                         <<NewBs:Offset/bitstring, _/bitstring>> = BS,
+                         [NewBs]
+                 end, lists:seq(BSsz-16, BSsz-1)),
+       lists:map(fun (Offset) ->
+                         PreOffset = Offset rem 16,
+                         <<_:PreOffset/bitstring, NewBs:Offset/bitstring, _/bitstring>> = BS,
+                         [NewBs]
+                 end, lists:seq(BSsz-32, BSsz-17))]).
 
 check_hopefull_fallback_data([], []) ->
     ok;
@@ -2692,6 +2720,8 @@ check_hopefull_fallback_data([X|Xs],[Y|Ys]) ->
 
 chk_hopefull_fallback(Binary, FallbackBinary) when is_binary(Binary) ->
     Binary = FallbackBinary;
+chk_hopefull_fallback([BitStr], [{Bin, BitSize}]) when is_bitstring(BitStr) ->
+    chk_hopefull_fallback(BitStr, {Bin, BitSize});
 chk_hopefull_fallback(BitStr, {Bin, BitSize}) when is_bitstring(BitStr) ->
     true = is_binary(Bin),
     true = is_integer(BitSize),
@@ -2717,6 +2747,50 @@ hopefull_export_fun_bug(Config) when is_list(Config) ->
     Msg = [1, fun blipp:blapp/7,
            2, fun blipp:blapp/7],
     {dummy, dummy@dummy} ! Msg.  % Would crash on debug VM
+
+huge_iovec(Config) ->
+    %% Make sure that we can pass a term that will produce
+    %% an io-vector larger than IOV_MAX over the distribution...
+    %% IOV_MAX is typically 1024. Currently we produce an
+    %% element in the io-vector for all off heap binaries...
+    NoBinaries = 1 bsl 14,
+    BinarySize = 65,
+    {ok, Node} = start_node(huge_iovec),
+    P = spawn_link(Node,
+                   fun () ->
+                           receive {From, Data} ->
+                                   From ! {self(), Data}
+                           end
+                   end),
+    RBL = mk_rand_bin_list(BinarySize, NoBinaries),
+    %% Check that it actually will produce a huge iovec...
+    %% If we set a limit on the size of the binaries
+    %% that will produce an element in the io-vector
+    %% we need to adjust this testcase...
+    true = length(term_to_iovec(RBL)) >= NoBinaries,
+    P ! {self(), RBL},
+    receive
+        {P, EchoedRBL} ->
+            stop_node(Node),
+            RBL = EchoedRBL
+    end,
+    ok.
+
+mk_rand_bin_list(Bytes, Binaries) ->
+    mk_rand_bin_list(Bytes, Binaries, []).
+
+mk_rand_bin_list(_Bytes, 0, Acc) ->
+    Acc;
+mk_rand_bin_list(Bytes, Binaries, Acc) ->
+    mk_rand_bin_list(Bytes, Binaries-1, [mk_rand_bin(Bytes) | Acc]).
+
+mk_rand_bin(Bytes) ->
+    mk_rand_bin(Bytes, []).
+
+mk_rand_bin(0, Data) ->
+    list_to_binary(Data);
+mk_rand_bin(N, Data) ->
+    mk_rand_bin(N-1, [rand:uniform(256) - 1 | Data]).
 
 
 %%% Utilities

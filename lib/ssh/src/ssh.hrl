@@ -319,6 +319,7 @@
       | authentication_daemon_options()
       | diffie_hellman_group_exchange_daemon_option()
       | negotiation_timeout_daemon_option()
+      | hello_timeout_daemon_option()
       | hardening_daemon_options()
       | callbacks_daemon_options()
       | send_ext_info_daemon_option()
@@ -355,6 +356,7 @@
         ssh_file:system_dir_daemon_option()
       | {auth_method_kb_interactive_data, prompt_texts() }
       | {user_passwords, [{UserName::string(),Pwd::string()}]}
+      | {pk_check_user, boolean()}  
       | {password, string()}
       | {pwdfun, pwdfun_2() | pwdfun_4()} .
 
@@ -368,9 +370,9 @@
 -type kb_int_fun_4() :: fun((Peer::ip_port(), User::string(), Service::string(), State::any()) -> kb_int_tuple()).
 -type kb_int_tuple() :: {Name::string(), Instruction::string(), Prompt::string(), Echo::boolean()}.
 
--type pwdfun_2() :: fun((User::string(), Password::string()) -> boolean()) .
+-type pwdfun_2() :: fun((User::string(), Password::string()|pubkey) -> boolean()) .
 -type pwdfun_4() :: fun((User::string(),
-                         Password::string(),
+                         Password::string()|pubkey,
                          PeerAddress::ip_port(),
                          State::any()) ->
                                boolean() | disconnect | {boolean(),NewState::any()}
@@ -385,6 +387,7 @@
 -type ssh_moduli_file() :: {ssh_moduli_file,string()}.
 
 -type negotiation_timeout_daemon_option() :: {negotiation_timeout, timeout()} .
+-type hello_timeout_daemon_option() :: {hello_timeout, timeout()} .
 
 -type hardening_daemon_options() ::
         {max_sessions, pos_integer()}
@@ -501,7 +504,8 @@
           recv_ext_info
 	 }).
 
--record(ssh_pty, {term = "", % e.g. "xterm"
+-record(ssh_pty, {c_version = "", % client version string, e.g "SSH-2.0-Erlang/4.10.5"
+                  term = "",      % e.g. "xterm"
 		  width = 80,
 		  height = 25,
 		  pixel_width = 1024,

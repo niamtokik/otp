@@ -137,7 +137,9 @@ connect(Socket, UserOptions, NegotiationTimeout) when is_port(Socket),
 	Options ->
            case valid_socket_to_use(Socket, ?GET_OPT(transport,Options)) of
                ok ->
-                   connect_socket(Socket, Options, NegotiationTimeout);
+                   connect_socket(Socket,
+                                  ?PUT_INTERNAL_OPT({connected_socket,Socket}, Options),
+                                  NegotiationTimeout);
                {error,SockError} ->
                    {error,SockError}
            end
@@ -185,8 +187,9 @@ connect(Host0, Port, UserOptions, NegotiationTimeout) when is_integer(Port),
 connect_socket(Socket, Options0, NegotiationTimeout) ->
     {ok, {Host,Port}} = inet:sockname(Socket),
     Profile = ?GET_OPT(profile, Options0),
-    {ok, SystemSup} = sshc_sup:start_child(Host, Port, Profile, Options0),
-    {ok, SubSysSup} = ssh_system_sup:start_subsystem(SystemSup, client, Host, Port, Profile, Options0),
+
+    {ok, {SystemSup, SubSysSup}} = sshc_sup:start_system_subsystem(Host, Port, Profile, Options0),
+
     ConnectionSup = ssh_system_sup:connection_supervisor(SystemSup),
     Opts = ?PUT_INTERNAL_OPT([{user_pid,self()},
                               {supervisors, [{system_sup, SystemSup},
@@ -506,7 +509,11 @@ shell(Socket) when is_port(Socket) ->
 shell(ConnectionRef) when is_pid(ConnectionRef) ->
     case ssh_connection:session_channel(ConnectionRef, infinity) of
 	{ok,ChannelId}  ->
-	    success = ssh_connection:ptty_alloc(ConnectionRef, ChannelId, []),
+	    success = ssh_connection:ptty_alloc(ConnectionRef, ChannelId,
+                                                [{pty_opts, [{echo,0}]}
+                                                ]),
+            success = ssh_connection:send_environment_vars(ConnectionRef, ChannelId,
+                                                           ["LANG", "LC_ALL"]),
 	    Args = [{channel_cb, ssh_shell},
 		    {init_args,[ConnectionRef, ChannelId]},
 		    {cm, ConnectionRef}, {channel_id, ChannelId}],

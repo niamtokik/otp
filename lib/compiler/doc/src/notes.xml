@@ -32,6 +32,138 @@
   <p>This document describes the changes made to the Compiler
     application.</p>
 
+<section><title>Compiler 7.6.6</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Several minor compiler bugs have been fixed:</p>
+	    <p>Constructing a binary with a list as a size of a
+	    binary segment could generate a BEAM file that could not
+	    be loaded.</p>
+	    <p>When matching a binary segment of type <c>float</c>
+	    and ignoring the matched out value, the match would
+	    always succeed, even if the size was invalid or the value
+	    of the float was NaN or some other non-numeric float
+	    value.</p>
+	    <p>Attempting to construct an invalid external fun (e.g.
+	    <c>fun m:f:bad</c>) is supposed to raise a
+	    '<c>badarg</c>' exception, but if the value was never
+	    used, no exception would be raised.</p>
+          <p>
+	    Own Id: OTP-16932</p>
+        </item>
+        <item>
+	    <p>Fixed multiple bugs in the validator that could cause
+	    it to reject valid code.</p>
+          <p>
+	    Own Id: OTP-17039 Aux Id: ERL-1426 </p>
+        </item>
+        <item>
+	    <p>The compiler could crash when a binary comprehension
+	    had a generator that depended on another generator.</p>
+          <p>
+	    Own Id: OTP-17045 Aux Id: ERL-1427 </p>
+        </item>
+        <item>
+	    <p>Fixed a bug in the type optimization pass that could
+	    yield incorrect values or cause the wrong clauses to be
+	    executed.</p>
+          <p>
+	    Own Id: OTP-17072 Aux Id: ERL-1440 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 7.6.5</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Fixed a bug in the boolean optimization pass that
+	    caused the compiler to confuse different clauses.</p>
+          <p>
+	    Own Id: OTP-16951 Aux Id: ERL-1384 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 7.6.4</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Fixed a performance bug that could be triggered by
+	    tuple matching in very large functions.</p>
+          <p>
+	    Own Id: OTP-16895 Aux Id: ERL-1359 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 7.6.3</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>If the update of a map with the '<c>Map#{Key :=
+	    Value}</c>' syntax failed, the line number in the stack
+	    backtrace could be incorrect.</p>
+          <p>
+	    Own Id: OTP-16701 Aux Id: ERL-1271 </p>
+        </item>
+        <item>
+	    <p>Fixed a performance bug that slowed down compilation
+	    of modules with deeply nested terms.</p>
+          <p>
+	    Own Id: OTP-16755 Aux Id: ERL-1297 </p>
+        </item>
+        <item>
+	    <p>The compiler could in rare circumstances do an an
+	    unsafe optimization that would result in a matching of a
+	    nested map pattern would fail to match.</p>
+          <p>
+	    Own Id: OTP-16820</p>
+        </item>
+        <item>
+	    <p>Fixed a bug in the validator that caused it to reject
+	    valid code.</p>
+          <p>
+	    Own Id: OTP-16838 Aux Id: ERL-1340 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 7.6.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>When calls to <c>is_map_key</c> were repeated, the
+	    compiler could terminate with an internal consistency
+	    failure.</p>
+          <p>
+	    Own Id: OTP-16708 Aux Id: ERL-1276 </p>
+        </item>
+        <item>
+	    <p>Fixed a bug in the type inference pass that could
+	    cause the compiler to hang.</p>
+          <p>
+	    Own Id: OTP-16745 Aux Id: ERL-1289 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
 <section><title>Compiler 7.6.1</title>
 
     <section><title>Fixed Bugs and Malfunctions</title>
@@ -149,6 +281,52 @@
 	    builds (e.g. <c>make -j128</c>).</p>
           <p>
 	    Own Id: OTP-16543 Aux Id: ERL-1186 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 7.5.4.3</title>
+
+    <section><title>Improvements and New Features</title>
+      <list>
+        <item>
+	    <p>Fixed a bug in the type optimization pass that could
+	    yield incorrect values or cause the wrong clauses to be
+	    executed.</p>
+          <p>
+	    Own Id: OTP-17073</p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 7.5.4.2</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Fixed a bug in the validator that could cause it to
+	    reject valid code</p>
+          <p>
+	    Own Id: OTP-17039 Aux Id: ERL-1426 </p>
+        </item>
+      </list>
+    </section>
+
+</section>
+
+<section><title>Compiler 7.5.4.1</title>
+
+    <section><title>Fixed Bugs and Malfunctions</title>
+      <list>
+        <item>
+	    <p>Fixed a bug that could cause the compiler to crash on
+	    code that constructed binaries.</p>
+          <p>
+	    Own Id: OTP-16747 Aux Id: ERL-1290 </p>
         </item>
       </list>
     </section>
@@ -4358,4 +4536,3 @@
     </section>
   </section>
 </chapter>
-

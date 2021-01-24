@@ -34,7 +34,8 @@
 	 normalize_general_name/1, 
          is_self_signed/1,
 	 is_issuer/2, 
-         issuer_id/2, 
+         issuer_id/2,
+         subject_id/1,
          distribution_points/1, 
 	 is_fixed_dh_cert/1, 
          verify_data/1, 
@@ -67,11 +68,15 @@
 -type test_root_cert() ::
         #{cert := binary(), key := public_key:private_key()}.
 %%====================================================================
-%% Internal application APIu
+%% Internal application APIs
 %%====================================================================
 
 %%--------------------------------------------------------------------
--spec verify_data(DER::binary()) -> {md5 | sha,  binary(), binary()}.
+-spec verify_data(DER::binary()) ->
+           {DigestType, PlainText, Signature}
+               when DigestType :: md5 | crypto:sha1() | crypto:sha2(),
+                    PlainText  :: binary(),
+                    Signature  :: binary().
 %%
 %% Description: Extracts data from DerCert needed to call public_key:verify/4.
 %%--------------------------------------------------------------------	 
@@ -303,6 +308,20 @@ issuer_id(Otpcert, self) ->
     Issuer = TBSCert#'OTPTBSCertificate'.issuer,
     SerialNr = TBSCert#'OTPTBSCertificate'.serialNumber,
     {ok, {SerialNr, normalize_general_name(Issuer)}}.  
+
+
+%%--------------------------------------------------------------------
+-spec subject_id(#'OTPCertificate'{}) -> 
+		       {integer(), term()}.
+%%
+%% Description: Extracts the subject and serial number from a certificate.
+%%--------------------------------------------------------------------
+subject_id(Otpcert) ->
+    TBSCert = Otpcert#'OTPCertificate'.tbsCertificate, 
+    Subject = TBSCert#'OTPTBSCertificate'.subject,
+    SerialNr = TBSCert#'OTPTBSCertificate'.serialNumber,
+    {SerialNr, normalize_general_name(Subject)}.  
+
 
 distribution_points(Otpcert) ->
     TBSCert = Otpcert#'OTPCertificate'.tbsCertificate,
@@ -1199,13 +1218,28 @@ validity(Opts) ->
     DefFrom0 = calendar:gregorian_days_to_date(calendar:date_to_gregorian_days(date())-1),
     DefTo0   = calendar:gregorian_days_to_date(calendar:date_to_gregorian_days(date())+7),
     {DefFrom, DefTo} = proplists:get_value(validity, Opts, {DefFrom0, DefTo0}),
-    Format =
+    
+    GenFormat =
         fun({Y,M,D}) ->
                 lists:flatten(
                   io_lib:format("~4..0w~2..0w~2..0w130000Z",[Y,M,D]))
         end,
-    #'Validity'{notBefore={generalTime, Format(DefFrom)},
-		notAfter ={generalTime, Format(DefTo)}}.
+    
+    UTCFormat =
+        fun({Y,M,D}) ->
+                [_, _, Y3, Y4] = integer_to_list(Y),
+                lists:flatten(
+                  io_lib:format("~s~2..0w~2..0w130000Z",[[Y3, Y4],M,D]))
+        end,
+    
+    #'Validity'{notBefore = validity_format(DefFrom, GenFormat, UTCFormat),
+                notAfter = validity_format(DefTo, GenFormat, UTCFormat)}.
+
+validity_format({Year, _, _} = Validity, GenFormat, _UTCFormat) when Year >= 2049 ->
+    {generalTime, GenFormat(Validity)};
+validity_format(Validity, _GenFormat, UTCFormat) ->
+    {utcTime, UTCFormat(Validity)}.
+
 
 sign_algorithm(#'RSAPrivateKey'{} = Key , Opts) ->
       case proplists:get_value(rsa_padding, Opts, rsa_pkcs1_pss_padding) of

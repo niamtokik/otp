@@ -36,7 +36,7 @@
 -record(static_env, {
                      role                  :: client | server,
                      transport_cb          :: atom(),   % callback module
-                     protocol_cb           :: tls_connection | dtls_connection,
+                     protocol_cb           :: tls_gen_connection | dtls_gen_connection,
                      data_tag              :: atom(),   % ex tcp.
                      close_tag             :: atom(),   % ex tcp_closed
                      error_tag             :: atom(),   % ex tcp_error
@@ -63,6 +63,8 @@
                         renegotiation        :: undefined | {boolean(), From::term() | internal | peer},
                         resumption = false   :: boolean(),  %% TLS 1.3
                         change_cipher_spec_sent = false :: boolean(),  %% TLS 1.3
+                        sni_guided_cert_selection = false :: boolean(), %% TLS 1.3
+                        early_data_accepted = false :: boolean(), %% TLS 1.3
                         allow_renegotiate = true                    ::boolean(),
                         %% Ext handling
                         hello,                %%:: #client_hello{} | #server_hello{}            
@@ -82,7 +84,10 @@
                         public_key_info      :: ssl_handshake:public_key_info() | 'undefined',
                         premaster_secret     :: binary() | secret_printout() | 'undefined',
                         server_psk_identity         :: binary() | 'undefined',  % server psk identity hint
-                        ticket_seed
+                        cookie_iv_shard         :: {binary(), binary()} %% IV, Shard
+                                                 | 'undefined',
+                        ocsp_stapling_state = #{ocsp_stapling => false, 
+                                                ocsp_expect => no_staple}
                        }).
 
 -record(connection_env, { 

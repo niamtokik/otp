@@ -20,15 +20,32 @@
 
 -module(tls_1_3_record_SUITE).
 
-%% Note: This directive should only be used in test suites.
--compile(export_all).
-
 -include_lib("common_test/include/ct.hrl").
 -include_lib("ssl/src/tls_record.hrl").
 -include_lib("ssl/src/tls_handshake.hrl").
 -include_lib("ssl/src/tls_handshake_1_3.hrl").
 -include_lib("ssl/src/ssl_cipher.hrl").
 -include_lib("ssl/src/ssl_internal.hrl").
+
+%% Callback functions
+-export([all/0,
+         init_per_suite/1,
+         end_per_suite/1]).
+
+%% Testcases
+-export([encode_decode/0,
+         encode_decode/1,
+         finished_verify_data/0,
+          finished_verify_data/1,
+         '1_RTT_handshake'/0,
+         '1_RTT_handshake'/1,
+         '0_RTT_handshake'/0,
+         '0_RTT_handshake'/1
+        ]).
+
+%%--------------------------------------------------------------------
+%% Common Test interface functions -----------------------------------
+%%--------------------------------------------------------------------
 
 all() ->
     [encode_decode,
@@ -250,7 +267,7 @@ encode_decode(_Config) ->
     %%       e2 10 ad f3 00 aa 1f 26 60 e1 b2 2e 10 f1 70 f9 2a
     HKDFAlgo = sha256,
     Salt = binary:copy(<<?BYTE(0)>>, 32),
-    IKM = binary:copy(<<?BYTE(0)>>, 32),
+    _IKM = binary:copy(<<?BYTE(0)>>, 32),
     EarlySecret =
         hexstr2bin("33 ad 0a 1c 60 7e c0 3b 09 e6 cd 98 93 68 0c
           e2 10 ad f3 00 aa 1f 26 60 e1 b2 2e 10 f1 70 f9 2a"),
@@ -279,7 +296,7 @@ encode_decode(_Config) ->
         hexstr2bin("b1 58 0e ea df 6d d5 89 b8 ef 4f 2d 56
          52 57 8c c8 10 e9 98 01 91 ec 8d 05 83 08 ce a2 16 a2 1e"),
 
-    SPublicKey =
+    _SPublicKey =
         hexstr2bin("c9 82 88 76 11 20 95 fe 66 76 2b db f7 c6
          72 e1 56 d6 cc 25 3b 83 3d f1 dd 69 b1 b0 4e 75 1f 0f"),
 
@@ -527,7 +544,8 @@ encode_decode(_Config) ->
     %% TODO: remove hardcoded IV size
     WriteIVInfo = tls_v1:create_info(<<"iv">>, <<>>,  12),
 
-    {WriteKey, WriteIV} = tls_v1:calculate_traffic_keys(HKDFAlgo, Cipher, SHSTrafficSecret),
+    KeyLength = ssl_cipher:key_material(Cipher),
+    {WriteKey, WriteIV} = tls_v1:calculate_traffic_keys(HKDFAlgo, KeyLength, SHSTrafficSecret),
 
     %% {server}  construct an EncryptedExtensions handshake message:
     %%
@@ -807,7 +825,7 @@ encode_decode(_Config) ->
     SWIV =
         hexstr2bin("cf 78 2b 88 dd 83 54 9a ad f1 e9 84"),
 
-    {SWKey, SWIV} = tls_v1:calculate_traffic_keys(HKDFAlgo, Cipher, SAPTrafficSecret),
+    {SWKey, SWIV} = tls_v1:calculate_traffic_keys(HKDFAlgo, KeyLength, SAPTrafficSecret),
 
     %% {server}  derive read traffic keys for handshake data:
     %%
@@ -832,7 +850,7 @@ encode_decode(_Config) ->
     SRIV =
         hexstr2bin("5b d3 c7 1b 83 6e 0b 76 bb 73 26 5f"),
 
-    {SRKey, SRIV} = tls_v1:calculate_traffic_keys(HKDFAlgo, Cipher, CHSTrafficSecret),
+    {SRKey, SRIV} = tls_v1:calculate_traffic_keys(HKDFAlgo, KeyLength, CHSTrafficSecret),
 
     %% {client}  calculate finished "tls13 finished":
     %%
@@ -909,7 +927,7 @@ encode_decode(_Config) ->
     CWIV =
         hexstr2bin("5b 78 92 3d ee 08 57 90 33 e5 23 d9"),
 
-    {CWKey, CWIV} = tls_v1:calculate_traffic_keys(HKDFAlgo, Cipher, CAPTrafficSecret),
+    {CWKey, CWIV} = tls_v1:calculate_traffic_keys(HKDFAlgo, KeyLength, CAPTrafficSecret),
 
     %% {client}  derive secret "tls13 res master":
     %%

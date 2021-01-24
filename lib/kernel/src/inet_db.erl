@@ -44,7 +44,8 @@
 	 del_socks_methods/1, del_socks_methods/0,
 	 add_socks_noproxy/1, del_socks_noproxy/1]).
 -export([set_cache_size/1, set_cache_refresh/1]).
--export([set_timeout/1, set_retry/1, set_inet6/1, set_usevc/1]).
+-export([set_timeout/1, set_retry/1, set_servfail_retry_timeout/1,
+         set_inet6/1, set_usevc/1]).
 -export([set_edns/1, set_udp_payload_size/1]).
 -export([set_resolv_conf/1, set_hosts_file/1, get_hosts_file/0]).
 -export([tcp_module/0, set_tcp_module/1]).
@@ -221,6 +222,9 @@ set_timeout(Time) -> res_option(timeout, Time).
 
 set_retry(N) -> res_option(retry, N).
 
+set_servfail_retry_timeout(Time) when is_integer(Time) andalso (Time >= 0) ->
+    res_option(servfail_retry_timeout, Time).
+
 set_inet6(Bool) -> res_option(inet6, Bool).
 
 set_usevc(Bool) -> res_option(usevc, Bool).
@@ -313,42 +317,104 @@ valid_lookup() -> [dns, file, yp, nis, nisplus, native].
 %% Reconstruct an inetrc sturcture from inet_db
 get_rc() -> 
     get_rc([hosts, domain, nameservers, search, alt_nameservers,
-	    timeout, retry, inet6, usevc,
+	    timeout, retry, servfail_retry_timeout, inet6, usevc,
 	    edns, udp_payload_size, resolv_conf, hosts_file,
 	    socks5_server,  socks5_port, socks5_methods, socks5_noproxy,
 	    udp, sctp, tcp, host, cache_size, cache_refresh, lookup], []).
 
 get_rc([K | Ks], Ls) ->
     case K of
-	hosts      -> get_rc_hosts(Ks, Ls, inet_hosts_byaddr);
-	domain     -> get_rc(domain, res_domain, "", Ks, Ls);
-	nameservers -> get_rc_ns(db_get(res_ns),nameservers,Ks,Ls);
-	alt_nameservers -> get_rc_ns(db_get(res_alt_ns),alt_nameservers,Ks,Ls);
-	search  -> get_rc(search, res_search, [], Ks, Ls);
-	timeout -> get_rc(timeout,res_timeout,?RES_TIMEOUT, Ks,Ls);
-	retry   -> get_rc(retry, res_retry, ?RES_RETRY, Ks, Ls);
-	inet6   -> get_rc(inet6, res_inet6, false, Ks, Ls);
-	usevc   -> get_rc(usevc, res_usevc, false, Ks, Ls);
-	edns    -> get_rc(edns, res_edns, false, Ks, Ls);
-	udp_payload_size -> get_rc(udp_payload_size, res_udp_payload_size,
-				   ?DNS_UDP_PAYLOAD_SIZE, Ks, Ls);
-	resolv_conf -> get_rc(resolv_conf, res_resolv_conf, undefined, Ks, Ls);
-	hosts_file -> get_rc(hosts_file, res_hosts_file, undefined, Ks, Ls);
-	tcp     -> get_rc(tcp,  tcp_module,  ?DEFAULT_TCP_MODULE,  Ks, Ls); 
-	udp     -> get_rc(udp,  udp_module,  ?DEFAULT_UDP_MODULE,  Ks, Ls);
-	sctp	-> get_rc(sctp, sctp_module, ?DEFAULT_SCTP_MODULE, Ks, Ls);
-	lookup  -> get_rc(lookup, res_lookup, [native,file], Ks, Ls);
-	cache_size -> get_rc(cache_size, cache_size, ?CACHE_LIMIT, Ks, Ls);
-	cache_refresh ->
-	    get_rc(cache_refresh, cache_refresh_interval,?CACHE_REFRESH,Ks,Ls);
-	socks5_server -> get_rc(socks5_server, socks5_server, "", Ks, Ls);
-	socks5_port    -> get_rc(socks5_port,socks5_port,?IPPORT_SOCKS,Ks,Ls);
-	socks5_methods -> get_rc(socks5_methods,socks5_methods,[none],Ks,Ls);
-	socks5_noproxy ->
-	    case db_get(socks5_noproxy) of
-		[] -> get_rc(Ks, Ls);
-		NoProxy -> get_rc_noproxy(NoProxy, Ks, Ls)
-	    end;
+	hosts                  -> get_rc_hosts(Ks, Ls, inet_hosts_byaddr);
+	domain                 -> get_rc(domain,
+                                         res_domain,
+                                         "",
+                                         Ks, Ls);
+	nameservers            -> get_rc_ns(db_get(res_ns),
+                                            nameservers,
+                                            Ks, Ls);
+	alt_nameservers        -> get_rc_ns(db_get(res_alt_ns),
+                                            alt_nameservers,
+                                            Ks, Ls);
+	search                 -> get_rc(search,
+                                         res_search,
+                                         [],
+                                         Ks, Ls);
+	timeout                -> get_rc(timeout,
+                                         res_timeout,
+                                         ?RES_TIMEOUT,
+                                         Ks, Ls);
+	retry                  -> get_rc(retry,
+                                         res_retry,
+                                         ?RES_RETRY,
+                                         Ks, Ls);
+	servfail_retry_timeout -> get_rc(servfail_retry_timeout,
+                                         res_servfail_retry_timeout,
+                                         ?RES_SERVFAIL_RETRY_TO,
+                                         Ks, Ls);
+	inet6                  -> get_rc(inet6,
+                                         res_inet6,
+                                         false,
+                                         Ks, Ls);
+	usevc                  -> get_rc(usevc,
+                                         res_usevc,
+                                         false,
+                                         Ks, Ls);
+	edns                   -> get_rc(edns,
+                                         res_edns,
+                                         false,
+                                         Ks, Ls);
+	udp_payload_size       -> get_rc(udp_payload_size,
+                                         res_udp_payload_size,
+                                         ?DNS_UDP_PAYLOAD_SIZE,
+                                         Ks, Ls);
+	resolv_conf            -> get_rc(resolv_conf,
+                                         res_resolv_conf,
+                                         undefined,
+                                         Ks, Ls);
+	hosts_file             -> get_rc(hosts_file,
+                                         res_hosts_file,
+                                         undefined,
+                                         Ks, Ls);
+	tcp                    -> get_rc(tcp,
+                                         tcp_module,
+                                         ?DEFAULT_TCP_MODULE,
+                                         Ks, Ls); 
+	udp                    -> get_rc(udp,
+                                         udp_module,
+                                         ?DEFAULT_UDP_MODULE,
+                                         Ks, Ls);
+	sctp                   -> get_rc(sctp,
+                                         sctp_module,
+                                         ?DEFAULT_SCTP_MODULE,
+                                         Ks, Ls);
+	lookup                 -> get_rc(lookup,
+                                         res_lookup,
+                                         [native, file],
+                                         Ks, Ls);
+	cache_size             -> get_rc(cache_size,
+                                         cache_size,
+                                         ?CACHE_LIMIT,
+                                         Ks, Ls);
+	cache_refresh          -> get_rc(cache_refresh,
+                                         cache_refresh_interval,
+                                         ?CACHE_REFRESH,
+                                         Ks, Ls);
+	socks5_server          -> get_rc(socks5_server,
+                                         socks5_server,
+                                         "",
+                                         Ks, Ls);
+	socks5_port            -> get_rc(socks5_port,
+                                         socks5_port,
+                                         ?IPPORT_SOCKS,
+                                         Ks, Ls);
+	socks5_methods         -> get_rc(socks5_methods,
+                                         socks5_methods,
+                                         [none],
+                                         Ks, Ls);
+	socks5_noproxy         -> case db_get(socks5_noproxy) of
+                                      [] -> get_rc(Ks, Ls);
+                                      NoProxy -> get_rc_noproxy(NoProxy, Ks, Ls)
+                                  end;
 	_ ->
 	    get_rc(Ks, Ls)
     end;
@@ -415,6 +481,7 @@ res_optname(lookup) -> res_lookup;
 res_optname(recurse) -> res_recurse;
 res_optname(search) -> res_search;
 res_optname(retry) -> res_retry;
+res_optname(servfail_retry_timeout) -> res_servfail_retry_timeout;
 res_optname(timeout) -> res_timeout;
 res_optname(inet6) -> res_inet6;
 res_optname(usevc) -> res_usevc;
@@ -448,6 +515,7 @@ res_check_option(recurse, R) when is_boolean(R) -> true;
 res_check_option(search, SearchList) ->
     res_check_list(SearchList, fun res_check_search/1);
 res_check_option(retry, N) when is_integer(N), N > 0 -> true;
+res_check_option(servfail_retry_timeout, T) when is_integer(T), T >= 0 -> true;
 res_check_option(timeout, T) when is_integer(T), T > 0 -> true;
 res_check_option(inet6, Bool) when is_boolean(Bool) -> true;
 res_check_option(usevc, Bool) when is_boolean(Bool) -> true;
@@ -684,9 +752,7 @@ res_lookup_type(Domain,Type,RRs) ->
 gethostbyaddr(IP) ->
     case dnip(IP) of
 	{ok, {IP1, HType, HLen, DnIP}} ->
-	    RRs = match_rr(#dns_rr { domain = DnIP, class = in, type = ptr,
-				     cnt = '_', tm = '_', ttl = '_',
-				     bm = '_', func = '_', data = '_' }),
+	    RRs = match_rr({DnIP, in, ptr}),
 	    ent_gethostbyaddr(RRs,  IP1, HType, HLen);
 	Error -> Error
     end.
@@ -787,6 +853,7 @@ lookup_socket(Socket) when is_port(Socket) ->
 %% res_usevc      Bool            - use tcp only
 %% res_id         Integer         - NS query identifier
 %% res_retry      Integer         - Retry count for UDP query
+%% res_servfail_retry_timeout Integer - Timeout to next query after a failure
 %% res_timeout    Integer         - UDP query timeout before retry
 %% res_inet6      Bool            - address family inet6 for gethostbyname/1
 %% res_usevc      Bool            - use Virtual Circuit (TCP)
@@ -830,8 +897,7 @@ init([]) ->
     end,
     Db = ets:new(inet_db, [public, named_table]),
     reset_db(Db),
-    CacheOpts = [public, bag, {keypos,#dns_rr.domain}, named_table],
-    Cache = ets:new(inet_cache, CacheOpts),
+    Cache = ets:new(inet_cache, [public, set, named_table]),
     HostsByname = ets:new(inet_hosts_byname, [named_table]),
     HostsByaddr = ets:new(inet_hosts_byaddr, [named_table]),
     HostsFileByname = ets:new(inet_hosts_file_byname, [named_table]),
@@ -857,6 +923,7 @@ reset_db(Db) ->
        {res_usevc, false},
        {res_id, 0},
        {res_retry, ?RES_RETRY},
+       {res_servfail_retry_timeout, ?RES_SERVFAIL_RETRY_TO},
        {res_timeout, ?RES_TIMEOUT},
        {res_inet6, false},
        {res_edns, false},
@@ -922,11 +989,11 @@ handle_call(Request, From, #state{db=Db}=State) ->
 	{del_rr, RR} when is_record(RR, dns_rr) ->
 	    %% note. del_rr will handle wildcards !!!
 	    Cache = State#state.cache,
-	    ets:match_delete(Cache, RR),
+	    ets:delete(Cache, cache_key(RR)),
 	    {reply, ok, State};
 
 	{lookup_rr, Domain, Class, Type} ->
-	    {reply, do_lookup_rr(Domain, Class, Type), State};
+	    {reply, match_rr({Domain, Class, Type}), State};
 
 	{listop, Opt, Op, E} ->
 	    El = [E],
@@ -1096,7 +1163,7 @@ handle_call(Request, From, #state{db=Db}=State) ->
 	    {reply, ok, State};
 
 	clear_cache ->
-	    ets:match_delete(State#state.cache, '_'),
+	    ets:delete_all_objects(State#state.cache),
 	    {reply, ok, State};
 
 	reset ->
@@ -1214,6 +1281,8 @@ handle_set_file(ParseFun, File, Bin, From, State) ->
 
 handle_update_file(
   Finfo, File, TagTm, TagInfo, ParseFun, From, #state{db = Db} = State) ->
+    ets:insert(Db, {TagTm, times()}),
+
     %%
     %% Update file content if file has been updated
     %%
@@ -1224,7 +1293,6 @@ handle_update_file(
         {ok, Finfo_1} ->
             %% File updated - read content
             ets:insert(Db, {TagInfo, Finfo_1}),
-            ets:insert(Db, {TagTm, times()}),
             Bin =
                 case erl_prim_loader:get_file(File) of
                     {ok, B, _} -> B;
@@ -1234,7 +1302,6 @@ handle_update_file(
         _ ->
             %% No file - clear content and reset monitor
             ets:insert(Db, {TagInfo, undefined}),
-            ets:insert(Db, {TagTm, times()}),
             handle_set_file(ParseFun, File, <<>>, From, State)
     end.
 
@@ -1526,6 +1593,7 @@ rc_reqname(_) -> undefined.
 is_res_set(domain) -> true;
 is_res_set(lookup) -> true;
 is_res_set(timeout) -> true;
+is_res_set(servfail_retry_timeout) -> true;
 is_res_set(retry) -> true;
 is_res_set(inet6) -> true;
 is_res_set(usevc) -> true;
@@ -1550,46 +1618,41 @@ do_add_rr(RR, Db, State) ->
     TM = times(),
     case alloc_entry(Db, CacheDb, TM) of
 	true ->
-	    cache_rr(Db, CacheDb, RR#dns_rr{tm = TM, cnt = TM});
+	    cache_rr(CacheDb, RR#dns_rr{tm = TM, cnt = TM});
 	_ ->
 	    false
     end.
 
-cache_rr(_Db, Cache, RR) ->
-    %% delete possible old entry
-    ets:match_delete(Cache, RR#dns_rr{cnt = '_', tm = '_', ttl = '_',
-				      bm = '_', func = '_'}),
-    ets:insert(Cache, RR).
+cache_rr(Cache, RR) ->
+    ets:insert(Cache, {cache_key(RR), RR}).
 
 times() ->
     erlang:monotonic_time(second).
     %% erlang:convert_time_unit(erlang:monotonic_time() - erlang:system_info(start_time),
     %%     		     native, second).
 
-%% lookup and remove old entries
+%% match and remove old entries
 
-do_lookup_rr(Domain, Class, Type) ->
-    match_rr(#dns_rr{domain = tolower(Domain), class = Class,type = Type,
-		     cnt = '_', tm = '_', ttl = '_',
-		     bm = '_', func = '_', data = '_'}).
+match_rr({_, _, _} = Key) ->
+    Time = times(),
+    case ets:lookup(inet_cache, Key) of
+	[{_,RR}] when RR#dns_rr.ttl =:= 0 -> %% at least once
+	    ets:delete(inet_cache, Key),
+	    [RR];
+	[{_,RR}] when RR#dns_rr.tm + RR#dns_rr.ttl < Time ->
+	    ets:delete(inet_cache, Key),
+	    [];
+	[{_,RR}] ->
+        %% This may fail if cache pruning removes this entry
+        %% at the same time we are updating it, so ignore the result.
+	    _ = ets:update_element(inet_cache, Key, {2, RR#dns_rr{cnt = Time}}),
+	    [RR];
+	[] ->
+	    []
+    end.
 
-match_rr(RR) ->
-    filter_rr(ets:match_object(inet_cache, RR), times()).
-
-
-%% filter old resource records and update access count
-
-filter_rr([RR | RRs], Time) when RR#dns_rr.ttl =:= 0 -> %% at least once
-    ets:match_delete(inet_cache, RR),
-    [RR | filter_rr(RRs, Time)];
-filter_rr([RR | RRs], Time) when RR#dns_rr.tm + RR#dns_rr.ttl < Time ->
-    ets:match_delete(inet_cache, RR),
-    filter_rr(RRs, Time);
-filter_rr([RR | RRs], Time) ->
-    ets:match_delete(inet_cache, RR),
-    ets:insert(inet_cache, RR#dns_rr { cnt = Time }),
-    [RR | filter_rr(RRs, Time)];
-filter_rr([], _Time) ->  [].
+cache_key(#dns_rr{domain = Domain, class = Class, type = Type}) ->
+    {Domain, Class, Type}.
 
 %% Lower case the domain name before storage.
 %%
@@ -1675,16 +1738,17 @@ do_refresh_cache(CacheDb) ->
 do_refresh_cache('$end_of_table', _, _, OldestT) ->
     OldestT;
 do_refresh_cache(Key, CacheDb, Now, OldestT) ->
-    Fun = fun(RR, T) when RR#dns_rr.tm + RR#dns_rr.ttl < Now ->
-		  ets:match_delete(CacheDb, RR),
-		  T;
-	     (#dns_rr{cnt = C}, T) when C < T ->
-		  C;
-	     (_, T) ->
-		  T
-	  end,
     Next = ets:next(CacheDb, Key),
-    OldT = lists:foldl(Fun, OldestT, ets:lookup(CacheDb, Key)),
+    OldT =
+        case ets:lookup(CacheDb, Key) of
+	    [{_,RR}] when RR#dns_rr.tm + RR#dns_rr.ttl < Now ->
+		ets:delete(CacheDb, Key),
+		OldestT;
+	     [{_,#dns_rr{cnt = C}}] when C < OldestT ->
+		C;
+	     _ ->
+		OldestT
+	end,
     do_refresh_cache(Next, CacheDb, Now, OldT).
 
 %% -------------------------------------------------------------------
@@ -1729,17 +1793,18 @@ delete_older(CacheDb, TM, N) ->
 
 delete_older('$end_of_table', _, _, _, M) ->
     M;
-delete_older(_, _, _, N, M) when N =< M ->
+delete_older(_, _, _, M, M) ->
     M;
-delete_older(Domain, CacheDb, TM, N, M) ->
-    Next = ets:next(CacheDb, Domain),
-    Fun = fun(RR, MM) when RR#dns_rr.cnt =< TM ->
-		  ets:match_delete(CacheDb, RR),
-		  MM + 1;
-	     (_, MM) ->
-		  MM
+delete_older(Key, CacheDb, TM, N, M) ->
+    Next = ets:next(CacheDb, Key),
+    M1 =
+	case ets:lookup(CacheDb, Key) of
+	    [{_,RR}] when RR#dns_rr.cnt =< TM ->
+		ets:delete(CacheDb, Key),
+		M + 1;
+	    _ ->
+		M
 	  end,
-    M1 = lists:foldl(Fun, M, ets:lookup(CacheDb, Domain)),
     delete_older(Next, CacheDb, TM, N, M1).
 
 

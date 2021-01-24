@@ -39,7 +39,7 @@
 	 replace_config/3, set_config/3, get_config/2, get_config/3]).
 -export([fail/3, skip/3]).
 -export([hours/1, minutes/1, seconds/1, sleep/1]).
--export([flush_mqueue/0, trap_exit/0, trap_exit/1]).
+-export([flush_mqueue/0, mqueue/0, mqueue/1, trap_exit/0, trap_exit/1]).
 -export([ping/1, local_nodes/0, nodes_on/1]).
 -export([start_node/2, stop_node/1]).
 -export([is_app_running/1, 
@@ -542,7 +542,8 @@ validate_ipv6_address(LocalAddr) ->
     LocalSA = #{family => Domain, addr => LocalAddr},
     ServerPort =
         case socket:bind(ServerSock, LocalSA) of
-            {ok, P1} ->
+            ok ->
+                {ok, #{port := P1}} = socket:sockname(ServerSock),
                 P1;
             {error, R3} ->
                 socket:close(ServerSock),
@@ -557,7 +558,7 @@ validate_ipv6_address(LocalAddr) ->
                 ?SKIP(f("(client) socket open failed: ~p", [R4]))
         end,
     case socket:bind(ClientSock, LocalSA) of
-        {ok, _} ->
+        ok ->
             ok;
         {error, R5} ->
             socket:close(ServerSock),
@@ -642,7 +643,7 @@ init_per_suite(Config) ->
             SKIP
     end.
 
-maybe_skip(HostInfo) ->
+maybe_skip(_HostInfo) ->
 
     %% We have some crap machines that causes random test case failures
     %% for no obvious reason. So, attempt to identify those without actually
@@ -701,14 +702,19 @@ maybe_skip(HostInfo) ->
                 true
         end,
     SkipWindowsOnVirtual =
+        %% fun() ->
+        %%         SysMan = win_sys_info_lookup(system_manufacturer, HostInfo),
+        %%         case string:to_lower(SysMan) of
+        %%             "vmware" ++ _ ->
+        %%                 true;
+        %%             _ ->
+        %%                 false
+        %%         end
+        %% end,
         fun() ->
-                SysMan = win_sys_info_lookup(system_manufacturer, HostInfo),
-                case string:to_lower(SysMan) of
-                    "vmware" ++ _ ->
-                        true;
-                    _ ->
-                        false
-                end
+                %% The host has been replaced and the VM has been reinstalled
+                %% so for now we give it a chance...
+                false
         end,
     COND = [{unix,  [{linux, LinuxVersionVerify}, 
                      {darwin, DarwinVersionVerify}]},
@@ -886,9 +892,9 @@ analyze_and_print_host_info() ->
             analyze_and_print_win_host_info(Version);
         _ ->
             io:format("OS Family: ~p"
-                      "~n   OS Type:        ~p"
-                      "~n   Version:        ~p"
-                      "~n   Num Schedulers: ~s"
+                      "~n   OS Type:               ~p"
+                      "~n   Version:               ~p"
+                      "~n   Num Online Schedulers: ~s"
                       "~n", [OsFam, OsName, Version, str_num_schedulers()]),
             {num_schedulers_to_factor(), []}
     end.
@@ -940,9 +946,9 @@ analyze_and_print_linux_host_info(Version) ->
         case (catch linux_which_cpuinfo(Distro)) of
             {ok, {CPU, BogoMIPS}} ->
                 io:format("CPU: "
-                          "~n   Model:          ~s"
-                          "~n   BogoMIPS:       ~w"
-                          "~n   Num Schedulers: ~s"
+                          "~n   Model:                 ~s"
+                          "~n   BogoMIPS:              ~w"
+                          "~n   Num Online Schedulers: ~s"
                           "~n", [CPU, BogoMIPS, str_num_schedulers()]),
                 if
                     (BogoMIPS > 20000) ->
@@ -960,8 +966,8 @@ analyze_and_print_linux_host_info(Version) ->
                 end;
             {ok, CPU} ->
                 io:format("CPU: "
-                          "~n   Model:          ~s"
-                          "~n   Num Schedulers: ~s"
+                          "~n   Model:                 ~s"
+                          "~n   Num Online Schedulers: ~s"
                           "~n", [CPU, str_num_schedulers()]),
                 NumChed = erlang:system_info(schedulers),
                 if
@@ -976,11 +982,13 @@ analyze_and_print_linux_host_info(Version) ->
     %% Check if we need to adjust the factor because of the memory
     try linux_which_meminfo() of
         AddFactor ->
-            io:format("TS Scale Factor: ~w~n", [timetrap_scale_factor()]),
+            io:format("TS Scale Factor: ~w (~w + ~w)~n",
+                      [timetrap_scale_factor(), Factor, AddFactor]),
             {Factor + AddFactor, []}
     catch
         _:_:_ ->
-            io:format("TS Scale Factor: ~w~n", [timetrap_scale_factor()]),
+            io:format("TS Scale Factor: ~w (~w)~n",
+                      [timetrap_scale_factor(), Factor]),
             {Factor, []}
     end.
 
@@ -1007,6 +1015,18 @@ linux_cpuinfo_motherboard() ->
 
 linux_cpuinfo_bogomips() ->
     case linux_cpuinfo_lookup("bogomips") of
+        BMips when is_list(BMips) ->
+            try lists:sum([bogomips_to_int(BM) || BM <- BMips])
+            catch
+                _:_:_ ->
+                    "-"
+            end;
+        _ ->
+            "-"
+    end.
+
+linux_cpuinfo_BogoMIPS() ->
+    case linux_cpuinfo_lookup("BogoMIPS") of
         BMips when is_list(BMips) ->
             try lists:sum([bogomips_to_int(BM) || BM <- BMips])
             catch
@@ -1046,9 +1066,9 @@ bogomips_to_int(BM) ->
 
 linux_cpuinfo_model() ->
     case linux_cpuinfo_lookup("model") of
-        [M] ->
+        [M|_] ->
             M;
-        _ ->
+        _X ->
             "-"
     end.
 
@@ -1062,8 +1082,8 @@ linux_cpuinfo_platform() ->
 
 linux_cpuinfo_model_name() ->
     case linux_cpuinfo_lookup("model name") of
-        [P|_] ->
-            P;
+        [M|_] ->
+            M;
         _ ->
             "-"
     end.
@@ -1113,21 +1133,34 @@ linux_which_cpuinfo(yellow_dog) ->
     {ok, CPU};
 
 linux_which_cpuinfo(wind_river) ->
-    CPU =
+    Model =
         case linux_cpuinfo_model() of
             "-" ->
-                throw(noinfo);
-            Model ->
-                case linux_cpuinfo_platform() of
+                %% Try 'model name'
+                case linux_cpuinfo_model_name() of
                     "-" ->
-                        Model;
-                    Platform ->
-                        Model ++ " (" ++ Platform ++ ")"
-                end
+                        throw(noinfo);
+                    MN ->
+                        MN
+                end;
+            M ->
+                M
+        end,
+    CPU =
+        case linux_cpuinfo_platform() of
+            "-" ->
+                Model;
+            Platform ->
+                Model ++ " (" ++ Platform ++ ")"
         end,
     case linux_cpuinfo_total_bogomips() of
         "-" ->
-            {ok, CPU};
+            case linux_cpuinfo_BogoMIPS() of
+                "-" ->
+                    {ok, CPU};
+                BMips ->
+                    {ok, {CPU, BMips}}
+            end;
         BMips ->
             {ok, {CPU, BMips}}
     end;
@@ -1329,10 +1362,10 @@ analyze_and_print_freebsd_host_info(Version) ->
             NCPU     = analyze_freebsd_ncpu(Extract),
             Memory   = analyze_freebsd_memory(Extract),
             io:format("CPU:"
-                      "~n   Model:          ~s"
-                      "~n   Speed:          ~w"
-                      "~n   N:              ~w"
-                      "~n   Num Schedulers: ~s"
+                      "~n   Model:                 ~s"
+                      "~n   Speed:                 ~w"
+                      "~n   N:                     ~w"
+                      "~n   Num Online Schedulers: ~s"
                       "~nMemory:"
                       "~n   ~w KB"
                       "~n",
@@ -1381,7 +1414,7 @@ analyze_and_print_freebsd_host_info(Version) ->
     catch
         _:_:_ ->
             io:format("CPU:"
-                      "~n   Num Schedulers: ~s"
+                      "~n   Num Online Schedulers: ~s"
                       "~n", [str_num_schedulers()]),
             io:format("TS Scale Factor: ~w~n", [timetrap_scale_factor()]),
             Factor = case erlang:system_info(schedulers) of
@@ -1589,8 +1622,8 @@ analyze_and_print_darwin_host_info(Version) ->
     case analyze_darwin_software_info() of
         [] ->
             io:format("Darwin:"
-                      "~n   Version:        ~s"
-                      "~n   Num Schedulers: ~s"
+                      "~n   Version:               ~s"
+                      "~n   Num Online Schedulers: ~s"
                       "~n", [Version, str_num_schedulers()]),
             {num_schedulers_to_factor(), []};
         SwInfo when  is_list(SwInfo) ->
@@ -1605,12 +1638,12 @@ analyze_and_print_darwin_host_info(Version) ->
             NumCores      = analyze_darwin_hw_total_number_of_cores(HwInfo),
             Memory        = analyze_darwin_hw_memory(HwInfo),
             io:format("Darwin:"
-                      "~n   System Version: ~s"
-                      "~n   Kernel Version: ~s"
-                      "~n   Model:          ~s (~s)"
-                      "~n   Processor:      ~s (~s, ~s, ~s)"
-                      "~n   Memory:         ~s"
-                      "~n   Num Schedulers: ~s"
+                      "~n   System Version:        ~s"
+                      "~n   Kernel Version:        ~s"
+                      "~n   Model:                 ~s (~s)"
+                      "~n   Processor:             ~s (~s, ~s, ~s)"
+                      "~n   Memory:                ~s"
+                      "~n   Num Online Schedulers: ~s"
                       "~n", [SystemVersion, KernelVersion,
                              ModelName, ModelId,
                              ProcName, ProcSpeed, NumProc, NumCores, 
@@ -1930,13 +1963,13 @@ analyze_and_print_solaris_host_info(Version) ->
                 "-"
         end,
     io:format("Solaris: ~s"
-              "~n   Release:         ~s"
-              "~n   Banner Name:     ~s"
-              "~n   Instruction Set: ~s"
-              "~n   CPUs:            ~s (~s)"
-              "~n   System Config:   ~s"
-              "~n   Memory Size:     ~s"
-              "~n   Num Schedulers:  ~s"
+              "~n   Release:               ~s"
+              "~n   Banner Name:           ~s"
+              "~n   Instruction Set:       ~s"
+              "~n   CPUs:                  ~s (~s)"
+              "~n   System Config:         ~s"
+              "~n   Memory Size:           ~s"
+              "~n   Num Online Schedulers: ~s"
               "~n~n", [Version, Release, BannerName, InstructionSet,
                        NumPhysCPU, NumVCPU,
                        SysConf, MemSz,
@@ -2008,7 +2041,7 @@ analyze_and_print_win_host_info(Version) ->
               "~n   System Model:           ~s"
               "~n   Number of Processor(s): ~s"
               "~n   Total Physical Memory:  ~s"
-              "~n   Num Schedulers:         ~s"
+              "~n   Num Online Schedulers:  ~s"
               "~n~n", [OsName, OsVersion, Version,
                        SysMan, SysMod, NumProcs, TotPhysMem,
                        str_num_schedulers()]),
@@ -2134,14 +2167,14 @@ process_win_system_info([H|T], Acc) ->
 
 
 str_num_schedulers() ->
-    try erlang:system_info(schedulers) of
+    try erlang:system_info(schedulers_online) of
         N -> f("~w", [N])
     catch
         _:_:_ -> "-"
     end.
 
 num_schedulers_to_factor() ->
-    try erlang:system_info(schedulers) of
+    try erlang:system_info(schedulers_online) of
         1 ->
             10;
         2 ->
@@ -2157,6 +2190,20 @@ num_schedulers_to_factor() ->
 
 
 linux_info_lookup(Key, File) ->
+    %% try
+    %%     begin
+    %%         GREP   = os:cmd("grep " ++ "\"" ++ Key ++ "\"" ++ " " ++ File),
+    %%         io:format("linux_info_lookup() -> GREP:   ~p~n", [GREP]),
+    %%         TOKENS = string:tokens(GREP, [$:,$\n]),
+    %%         io:format("linux_info_lookup() -> TOKENS: ~p~n", [TOKENS]),
+    %%         INFO   = [string:trim(S) || S <- TOKENS],
+    %%         io:format("linux_info_lookup() -> INFO:   ~p~n", [INFO]),
+    %%         linux_info_lookup_collect(Key, INFO, [])
+    %%     end
+    %% catch
+    %%     _:_:_ ->
+    %%         "-"
+    %% end.
     try [string:trim(S) || S <- string:tokens(os:cmd("grep " ++ "\"" ++ Key ++ "\"" ++ " " ++ File), [$:,$\n])] of
         Info ->
             linux_info_lookup_collect(Key, Info, [])
@@ -2199,6 +2246,17 @@ sleep(MSecs) ->
 %% ----------------------------------------------------------------
 %% Process utility function
 %%
+
+mqueue() ->
+    mqueue(self()).
+mqueue(Pid) when is_pid(Pid) ->
+    Key = messages,
+    case process_info(Pid, Key) of
+        {Key, Msgs} ->
+            Msgs;
+        _ ->
+            []
+    end.
 
 flush_mqueue() ->
     io:format("~p~n", [lists:reverse(flush_mqueue([]))]).

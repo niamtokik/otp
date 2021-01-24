@@ -466,12 +466,14 @@ try_clause -> pat_expr clause_guard clause_body :
 	{clause,A,[{tuple,A,[{atom,A,throw},'$1',{var,A,'_'}]}],'$2','$3'}.
 try_clause -> atom ':' pat_expr try_opt_stacktrace clause_guard clause_body :
 	A = ?anno('$1'),
-	{clause,A,[{tuple,A,['$1','$3',{var,A,'$4'}]}],'$5','$6'}.
+	T = case '$4' of '_' -> {var,A,'_'}; V -> V end,
+	{clause,A,[{tuple,A,['$1','$3',T]}],'$5','$6'}.
 try_clause -> var ':' pat_expr try_opt_stacktrace clause_guard clause_body :
 	A = ?anno('$1'),
-	{clause,A,[{tuple,A,['$1','$3',{var,A,'$4'}]}],'$5','$6'}.
+	T = case '$4' of '_' -> {var,A,'_'}; V -> V end,
+	{clause,A,[{tuple,A,['$1','$3',T]}],'$5','$6'}.
 
-try_opt_stacktrace -> ':' var : element(3, '$2').
+try_opt_stacktrace -> ':' var : '$2'.
 try_opt_stacktrace -> '$empty' : '_'.
 
 argument_list -> '(' ')' : {[],?anno('$1')}.
@@ -557,10 +559,6 @@ Erlang code.
 -export([type_inop_prec/1,type_preop_prec/1]).
 -export([map_anno/2, fold_anno/3, mapfold_anno/3,
          new_anno/1, anno_to_term/1, anno_from_term/1]).
-
-%% The following directive is needed for (significantly) faster compilation
-%% of the generated .erl file by the HiPE compiler.  Please do not remove.
--compile([{hipe,[{regalloc,linear_scan}]}]).
 
 -export_type([abstract_clause/0, abstract_expr/0, abstract_form/0,
               abstract_type/0, form_info/0, error_info/0]).
@@ -1380,19 +1378,28 @@ abstract(T) ->
 -spec abstract(Data, Options) -> AbsTerm when
       Data :: term(),
       Options :: Line | [Option],
-      Option :: {line, Line} | {encoding, Encoding},
+      Option :: {encoding, Encoding}
+              | {line, Line}
+              | {location, Location},
       Encoding :: 'latin1' | 'unicode' | 'utf8' | 'none' | encoding_func(),
       Line :: erl_anno:line(),
+      Location :: erl_anno:location(),
       AbsTerm :: abstract_expr().
 
 abstract(T, Line) when is_integer(Line) ->
     Anno = erl_anno:new(Line),
     abstract(T, Anno, enc_func(epp:default_encoding()));
 abstract(T, Options) when is_list(Options) ->
-    Line = proplists:get_value(line, Options, 0),
     Encoding = proplists:get_value(encoding, Options,epp:default_encoding()),
     EncFunc = enc_func(Encoding),
-    Anno = erl_anno:new(Line),
+    Location =
+        case proplists:get_value(location, Options) of
+            undefined ->
+                proplists:get_value(line, Options, 0);
+            Loc ->
+                Loc
+        end,
+    Anno = erl_anno:new(Location),
     abstract(T, Anno, EncFunc).
 
 -define(UNICODE(C),

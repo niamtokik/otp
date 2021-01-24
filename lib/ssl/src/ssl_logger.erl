@@ -180,6 +180,11 @@ parse_handshake(Direction, #certificate{} = Certificate) ->
                            [header_prefix(Direction)]),
     Message = io_lib:format("~p", [?rec_info(certificate, Certificate)]),
     {Header, Message};
+parse_handshake(Direction, #certificate_status{} = CertificateStatus) ->
+    Header = io_lib:format("~s Handshake, CertificateStatus",
+                           [header_prefix(Direction)]),
+    Message = io_lib:format("~p", [?rec_info(certificate_status, CertificateStatus)]),
+    {Header, Message};
 parse_handshake(Direction, #server_key_exchange{} = ServerKeyExchange) ->
     Header = io_lib:format("~s Handshake, ServerKeyExchange",
                            [header_prefix(Direction)]),
@@ -249,8 +254,12 @@ parse_handshake(Direction, #key_update{} = KeyUpdate) ->
     Header = io_lib:format("~s Post-Handshake, KeyUpdate",
                            [header_prefix(Direction)]),
     Message = io_lib:format("~p", [?rec_info(key_update, KeyUpdate)]),
+    {Header, Message};
+parse_handshake(Direction, #end_of_early_data{} = EndOfEarlyData) ->
+    Header = io_lib:format("~s Handshake, EndOfEarlyData",
+                           [header_prefix(Direction)]),
+    Message = io_lib:format("~p", [?rec_info(end_of_early_data, EndOfEarlyData)]),
     {Header, Message}.
-
 
 parse_cipher_suites([_|_] = Ciphers) ->
     [format_cipher(C) || C <- Ciphers].

@@ -27,25 +27,80 @@ to generate the configure scripts.
     $ ./otp_build autoconf
 
 
-Use the following when compiling a 64-bit version.
+Use the following commands when compiling a 64-bit version.
 
     $ export NDK_ABI_PLAT=android21      # When targeting Android 5.0 Lollipop
+
+
+    $ # Either without OpenSSL support:
+    $
     $ ./otp_build configure \
          --xcomp-conf=./xcomp/erl-xcomp-arm64-android.conf  \
          --without-ssl
 
 
-Use the following instead when compiling a 32-bit version.
+    $ # Or with OpenSSL linked statically:
+    $
+    $ cd /path/to/OpenSSL/source/dir/built/for/android-arm64
+    $ # First follow the NOTES.ANDROID build instructions from OpenSSL
+    $
+    $ # Then to avoid the full installation of this cross-compiled build,
+    $ # manually create a 'lib' directory at the root of the OpenSSL directory
+    $ # (at the same level as 'include') and link 'libcrypto.a' inside it.
+    $
+    $ mkdir lib
+    $ ln -s ../libcrypto.a lib/libcrypto.a
+    $ cd -   # Return to the Erlang/OTP directory
+    $
+    $ # This previous step is needed for the OpenSSL static linking to work as
+    $ # the --with-ssl option expects a path with both the 'lib' and 'include'
+    $ # directories. Otherwise the Erlang/OTP build will fallback to dynamic
+    $ # linking if it doesn't find 'libcrypto.a' in its expected location.
+    $ ./otp_build configure \
+         --xcomp-conf=./xcomp/erl-xcomp-arm64-android.conf  \
+         --with-ssl=/path/to/OpenSSL/source/dir/built/for/android-arm64 \
+         --disable-dynamic-ssl-lib
+
+
+Use the following commands instead when compiling a 32-bit version.
 
     $ export NDK_ABI_PLAT=androideabi16  # When targeting Android 4.1 Jelly Bean
+
+
+    $ # Either without OpenSSL support:
+    $
     $ ./otp_build configure \
          --xcomp-conf=./xcomp/erl-xcomp-arm-android.conf  \
          --without-ssl
 
 
+    $ # Or with OpenSSL linked statically:
+    $
+    $ cd /path/to/OpenSSL/source/dir/built/for/android-arm
+    $ # First follow the NOTES.ANDROID build instructions from OpenSSL
+    $
+    $ # Then to avoid the full installation of this cross-compiled build,
+    $ # manually create a 'lib' directory at the root of the OpenSSL directory
+    $ # (at the same level as 'include') and link 'libcrypto.a' inside it.
+    $
+    $ mkdir lib
+    $ ln -s ../libcrypto.a lib/libcrypto.a
+    $ cd -   # Return to the Erlang/OTP directory
+    $
+    $ # This previous step is needed for the OpenSSL static linking to work as
+    $ # the --with-ssl option expects a path with both the 'lib' and 'include'
+    $ # directories. Otherwise the Erlang/OTP build will fallback to dynamic
+    $ # linking if it doesn't find 'libcrypto.a' in its expected location.
+    $ ./otp_build configure \
+         --xcomp-conf=./xcomp/erl-xcomp-arm-android.conf  \
+         --with-ssl=/path/to/OpenSSL/source/dir/built/for/android-arm \
+         --disable-dynamic-ssl-lib
+
+
 ### Compile Erlang/OTP ###
 
-    $ # make noboot [-j4] # noboot doesn't work, is it a recent regression?
+    $ make noboot [-j4]
+      or
     $ make [-j4]
 
 
@@ -77,19 +132,6 @@ from other local applications due to Android sandbox security model.
 To properly integrate into an Android application, the installation would have
 to target /data/data/[your/app/package/name]/files/[erlang/dir/once/unpacked]
 as shown in https://github.com/JeromeDeBretagne/erlanglauncher as an example.
-
-TODO: Propose a permanent fix for the following issue.
-Adapt the installation specifically for Android, by replacing manually /bin/sh
-into /system/bin/sh in the various Erlang/OTP release scripts, such as:
-   - bin/erl
-   - bin/start
-   - bin/start_erl
-   - erts-X.Y.Z/bin/erl
-   - erts-X.Y.Z/bin/erl.src
-   - erts-X.Y.Z/bin/start
-   - erts-X.Y.Z/bin/start_erl.src
-   - erts-X.Y.Z/bin/start.src
-   - etc.
 
 WARNING: adb has issues with symlinks (and java.util.zip too). There is only
 one symlink for epmd in recent Erlang/OTP releases (20 to master-based 23) so

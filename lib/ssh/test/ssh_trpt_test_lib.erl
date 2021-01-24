@@ -20,8 +20,6 @@
 
 -module(ssh_trpt_test_lib).
 
-%%-compile(export_all).
-
 -export([exec/1, exec/2,
 	 instantiate/2,
 	 format_msg/1,
@@ -30,9 +28,9 @@
        ).
 
 -include_lib("common_test/include/ct.hrl").
--include_lib("ssh/src/ssh.hrl").		% ?UINT32, ?BYTE, #ssh{} ...
--include_lib("ssh/src/ssh_transport.hrl").
--include_lib("ssh/src/ssh_auth.hrl").
+-include("ssh.hrl").		% ?UINT32, ?BYTE, #ssh{} ...
+-include("ssh_transport.hrl").
+-include("ssh_auth.hrl").
 
 %%%----------------------------------------------------------------
 -record(s, {
@@ -100,7 +98,7 @@ exec(Op, S0=#s{}) ->
 	    report_trace(exit, Exit, S1),
 	    exit({Exit,Op});
         Cls:Err ->
-            ct:pal("Class=~p, Error=~p", [Cls,Err]),
+            ct:log("Class=~p, Error=~p", [Cls,Err]),
             error({"fooooooO",Op})
     end;
 exec(Op, {ok,S=#s{}}) -> exec(Op, S);
